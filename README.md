@@ -3,16 +3,11 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/ripkitten-co/whisker.svg)](https://pkg.go.dev/github.com/ripkitten-co/whisker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-PostgreSQL-backed document store and event sourcing for Go. Think MongoDB semantics on top of PostgreSQL: JSONB collections, append-only event streams, transactional sessions, zero migration files.
+MongoDB-style document store on top of PostgreSQL. JSONB collections, event streams, transactions. No migration files.
 
-## Features
+## Why?
 
-- **Document Collections** - type-safe CRUD with Go generics, JSONB storage, optimistic concurrency
-- **Event Streams** - append-only event sourcing with expected version checks
-- **Sessions** - Unit of Work wrapping a single PostgreSQL transaction
-- **Zero Migrations** - tables created automatically on first use
-- **Convention Over Configuration** - plain Go structs, no tags needed
-- **Swappable Codecs** - pluggable JSON serialization (jsoniter by default)
+We wanted [Marten](https://martendb.io/)'s developer experience in Go. Store documents as JSONB, append events, wrap it all in a transaction. Postgres does the heavy lifting, Whisker just makes it nice to use.
 
 ## Install
 
@@ -20,7 +15,7 @@ PostgreSQL-backed document store and event sourcing for Go. Think MongoDB semant
 go get github.com/ripkitten-co/whisker
 ```
 
-Requires Go 1.23+ and PostgreSQL 15+.
+Go 1.23+, PostgreSQL 15+.
 
 ## Quick Start
 
@@ -53,7 +48,6 @@ func main() {
 	}
 	defer store.Close()
 
-	// Documents
 	users := documents.Collection[User](store, "users")
 
 	users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "alice@example.com"})
@@ -68,7 +62,6 @@ func main() {
 	results, _ := users.Where("name", "=", "Bob").Execute(ctx)
 	fmt.Println(len(results)) // 1
 
-	// Events
 	es := events.New(store)
 
 	es.Append(ctx, "user-u1", 0, []events.Event{
@@ -83,7 +76,13 @@ func main() {
 
 ## Documents
 
-Collections are typed with Go generics. Just use plain Go structs:
+Plain Go structs, no tags needed. Whisker figures it out:
+
+| Field | What it does | Where it lives |
+|-------|-------------|----------------|
+| `ID` | document key | its own column (not in the JSONB) |
+| `Version` | optimistic locking | its own column (not in the JSONB) |
+| anything else | your data | JSONB, keys are camelCased (`FirstName` -> `"firstName"`) |
 
 ```go
 type Order struct {
@@ -96,17 +95,9 @@ type Order struct {
 orders := documents.Collection[Order](store, "orders")
 ```
 
-Whisker detects fields by convention:
+The `Version` field opts you into optimistic concurrency. Updates do `WHERE version = $current` and bump it. If someone else wrote first, you get `whisker.ErrConcurrencyConflict`. Leave out `Version` if you don't care about that.
 
-| Field | Role | Storage |
-|-------|------|---------|
-| `ID` | document identity | own column, excluded from JSONB |
-| `Version` | optimistic concurrency | own column, excluded from JSONB |
-| everything else | document data | camelCase JSONB keys (`FirstName` -> `"firstName"`) |
-
-If a struct has a `Version` field (type `int`), updates check `WHERE version = $current` and increment automatically. Concurrent writes return `whisker.ErrConcurrencyConflict`. No `Version` field = no concurrency checking.
-
-Override conventions with tags when you need to: `whisker:"id"` / `whisker:"version"` to pick a different field, `json` tags to control JSONB key names.
+You can override the defaults with `whisker:"id"` / `whisker:"version"` tags, or use `json` tags for custom JSONB key names.
 
 ### CRUD
 
@@ -125,30 +116,29 @@ results, err := orders.Where("item", "=", "widget").Execute(ctx)
 results, err  = orders.Where("total", ">", 50).Where("item", "!=", "gizmo").Execute(ctx)
 ```
 
-Supported operators: `=`, `!=`, `>`, `<`, `>=`, `<=`.
+Operators: `=`, `!=`, `>`, `<`, `>=`, `<=`.
 
 ## Events
 
-Append-only event streams with optimistic concurrency per stream.
+Append-only streams. Each stream has its own version counter for concurrency.
 
 ```go
 es := events.New(store)
 
-// expectedVersion 0 means "new stream"
 err := es.Append(ctx, "order-123", 0, []events.Event{
 	{Type: "OrderCreated", Data: []byte(`{"item":"widget"}`)},
 	{Type: "OrderPaid", Data: []byte(`{"amount":100}`)},
 })
 
-stream, _ := es.ReadStream(ctx, "order-123", 0) // all events
+stream, _ := es.ReadStream(ctx, "order-123", 0) // from the beginning
 stream, _ = es.ReadStream(ctx, "order-123", 2)  // from version 2
 ```
 
-Appending to an existing stream with `expectedVersion: 0` returns `whisker.ErrStreamExists`. Wrong expected version returns `whisker.ErrConcurrencyConflict`.
+`expectedVersion: 0` means "this stream shouldn't exist yet" - if it does, `whisker.ErrStreamExists`. Wrong version on an existing stream gives `whisker.ErrConcurrencyConflict`.
 
 ## Sessions
 
-Sessions wrap a PostgreSQL transaction. Everything inside commits or rolls back atomically.
+Everything in a session runs in one Postgres transaction.
 
 ```go
 sess, err := store.Session(ctx)
@@ -167,18 +157,16 @@ err = sess.Rollback(ctx) // discard everything
 
 ## Schema
 
-Whisker manages its own tables, all prefixed with `whisker_`:
+All tables are prefixed `whisker_` and created on first use (`CREATE TABLE IF NOT EXISTS`). No migration files, nothing to set up.
 
-- `whisker_{collection}` - one table per document collection
-- `whisker_events` - single table for all event streams
-
-Tables are created lazily on first use. No migration files, no setup steps.
+- `whisker_{name}` per document collection
+- `whisker_events` for all event streams
 
 ## Configuration
 
 ```go
 store, err := whisker.New(ctx, connString,
-	whisker.WithCodec(myCustomCodec), // swap JSON serialization
+	whisker.WithCodec(myCustomCodec),
 )
 ```
 
@@ -186,8 +174,8 @@ store, err := whisker.New(ctx, connString,
 
 ```bash
 go test ./...                        # unit tests
-go test -tags=integration ./...      # integration tests (requires Docker)
-docker compose up -d                 # local PostgreSQL
+go test -tags=integration ./...      # needs Docker
+docker compose up -d                 # local pg
 ```
 
 ## License
