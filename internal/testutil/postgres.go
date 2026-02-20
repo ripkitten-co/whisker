@@ -17,6 +17,7 @@ func SetupPostgres(t *testing.T) string {
 		postgres.WithDatabase("whisker_test"),
 		postgres.WithUsername("whisker"),
 		postgres.WithPassword("whisker"),
+		postgres.BasicWaitStrategies(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
