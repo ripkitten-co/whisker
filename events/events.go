@@ -1,0 +1,117 @@
+package events
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	sq "github.com/Masterminds/squirrel"
+	"github.com/ripkitten-co/whisker"
+	"github.com/ripkitten-co/whisker/internal/pg"
+	"github.com/ripkitten-co/whisker/schema"
+)
+
+var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+type Event struct {
+	StreamID  string
+	Version   int
+	Type      string
+	Data      []byte
+	Metadata  []byte
+	CreatedAt time.Time
+}
+
+type Store struct {
+	exec   pg.Executor
+	schema *schema.Bootstrap
+}
+
+func New(b whisker.Backend) *Store {
+	return &Store{
+		exec:   b.DBExecutor(),
+		schema: b.SchemaBootstrap(),
+	}
+}
+
+func (es *Store) Append(ctx context.Context, streamID string, expectedVersion int, evts []Event) error {
+	if err := es.schema.EnsureEvents(ctx, es.exec); err != nil {
+		return err
+	}
+
+	if expectedVersion > 0 {
+		var currentVersion int
+		err := es.exec.QueryRow(ctx,
+			"SELECT COALESCE(MAX(version), 0) FROM whisker_events WHERE stream_id = $1",
+			streamID,
+		).Scan(&currentVersion)
+		if err != nil {
+			return fmt.Errorf("events: append %s: check version: %w", streamID, err)
+		}
+		if currentVersion != expectedVersion {
+			return fmt.Errorf("events: append %s: expected version %d but got %d: %w",
+				streamID, expectedVersion, currentVersion, whisker.ErrConcurrencyConflict)
+		}
+	}
+
+	for i, evt := range evts {
+		version := expectedVersion + i + 1
+
+		sql, args, err := psql.
+			Insert("whisker_events").
+			Columns("stream_id", "version", "type", "data", "metadata").
+			Values(streamID, version, evt.Type, evt.Data, evt.Metadata).
+			ToSql()
+		if err != nil {
+			return fmt.Errorf("events: append %s: build sql: %w", streamID, err)
+		}
+
+		_, err = es.exec.Exec(ctx, sql, args...)
+		if err != nil {
+			if expectedVersion == 0 {
+				return fmt.Errorf("events: append %s: %w", streamID, whisker.ErrStreamExists)
+			}
+			return fmt.Errorf("events: append %s: %w", streamID, err)
+		}
+	}
+
+	return nil
+}
+
+func (es *Store) ReadStream(ctx context.Context, streamID string, fromVersion int) ([]Event, error) {
+	if err := es.schema.EnsureEvents(ctx, es.exec); err != nil {
+		return nil, err
+	}
+
+	builder := psql.
+		Select("stream_id", "version", "type", "data", "metadata", "created_at").
+		From("whisker_events").
+		Where(sq.Eq{"stream_id": streamID}).
+		OrderBy("version ASC")
+
+	if fromVersion > 0 {
+		builder = builder.Where(sq.GtOrEq{"version": fromVersion})
+	}
+
+	sql, args, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("events: read %s: build sql: %w", streamID, err)
+	}
+
+	rows, err := es.exec.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("events: read %s: %w", streamID, err)
+	}
+	defer rows.Close()
+
+	var result []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.StreamID, &e.Version, &e.Type, &e.Data, &e.Metadata, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("events: read %s: scan: %w", streamID, err)
+		}
+		result = append(result, e)
+	}
+
+	return result, rows.Err()
+}
