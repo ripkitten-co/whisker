@@ -3,16 +3,16 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/ripkitten-co/whisker.svg)](https://pkg.go.dev/github.com/ripkitten-co/whisker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A PostgreSQL-powered document store and event sourcing library for Go. Zero migrations, JSONB storage, append-only event streams, and transactional sessions — all backed by PostgreSQL.
+PostgreSQL-backed document store and event sourcing for Go. Think MongoDB semantics on top of PostgreSQL: JSONB collections, append-only event streams, transactional sessions, zero migration files.
 
 ## Features
 
-- **Document Collections** — Type-safe CRUD with Go generics, JSONB storage, and optimistic concurrency
-- **Event Streams** — Append-only event sourcing with expected version checks
-- **Sessions** — Unit of Work pattern wrapping a PostgreSQL transaction for atomic operations across documents and events
-- **Zero Migrations** — Tables are created automatically via `CREATE TABLE IF NOT EXISTS`
-- **Convention Over Configuration** — Plain Go structs, no tags required. ID and Version detected by field name, camelCase JSONB keys
-- **Swappable Codecs** — JSON serialization is pluggable (jsoniter by default)
+- **Document Collections** - type-safe CRUD with Go generics, JSONB storage, optimistic concurrency
+- **Event Streams** - append-only event sourcing with expected version checks
+- **Sessions** - Unit of Work wrapping a single PostgreSQL transaction
+- **Zero Migrations** - tables created automatically on first use
+- **Convention Over Configuration** - plain Go structs, no tags needed
+- **Swappable Codecs** - pluggable JSON serialization (jsoniter by default)
 
 ## Install
 
@@ -97,13 +97,16 @@ orders := documents.Collection[Order](store, "orders")
 ```
 
 Whisker detects fields by convention:
-- `ID` field — document identity (stored in its own column, excluded from JSONB)
-- `Version` field — optimistic concurrency (stored in its own column, excluded from JSONB)
-- All other fields — stored as camelCase JSONB keys (`FirstName` → `"firstName"`)
 
-A `Version` field (type `int`) enables optimistic concurrency — updates check `WHERE version = $current` and increment automatically. If another writer changed the document, you get `whisker.ErrConcurrencyConflict`. Omit the `Version` field to skip concurrency checking.
+| Field | Role | Storage |
+|-------|------|---------|
+| `ID` | document identity | own column, excluded from JSONB |
+| `Version` | optimistic concurrency | own column, excluded from JSONB |
+| everything else | document data | camelCase JSONB keys (`FirstName` -> `"firstName"`) |
 
-Use `whisker:"id"` or `whisker:"version"` tags to override which field is used. Use `json` tags to override JSONB key names.
+If a struct has a `Version` field (type `int`), updates check `WHERE version = $current` and increment automatically. Concurrent writes return `whisker.ErrConcurrencyConflict`. No `Version` field = no concurrency checking.
+
+Override conventions with tags when you need to: `whisker:"id"` / `whisker:"version"` to pick a different field, `json` tags to control JSONB key names.
 
 ### CRUD
 
@@ -126,7 +129,7 @@ Supported operators: `=`, `!=`, `>`, `<`, `>=`, `<=`.
 
 ## Events
 
-Append-only event streams with optimistic concurrency on the stream level.
+Append-only event streams with optimistic concurrency per stream.
 
 ```go
 es := events.New(store)
@@ -137,18 +140,15 @@ err := es.Append(ctx, "order-123", 0, []events.Event{
 	{Type: "OrderPaid", Data: []byte(`{"amount":100}`)},
 })
 
-// read all events
-stream, _ := es.ReadStream(ctx, "order-123", 0)
-
-// read from a specific version
-stream, _ = es.ReadStream(ctx, "order-123", 2)
+stream, _ := es.ReadStream(ctx, "order-123", 0) // all events
+stream, _ = es.ReadStream(ctx, "order-123", 2)  // from version 2
 ```
 
-Appending to an existing stream with `expectedVersion: 0` returns `whisker.ErrStreamExists`. Appending with a wrong expected version returns `whisker.ErrConcurrencyConflict`.
+Appending to an existing stream with `expectedVersion: 0` returns `whisker.ErrStreamExists`. Wrong expected version returns `whisker.ErrConcurrencyConflict`.
 
 ## Sessions
 
-Sessions wrap a PostgreSQL transaction. Documents and events within a session are committed or rolled back atomically.
+Sessions wrap a PostgreSQL transaction. Everything inside commits or rolls back atomically.
 
 ```go
 sess, err := store.Session(ctx)
@@ -167,10 +167,10 @@ err = sess.Rollback(ctx) // discard everything
 
 ## Schema
 
-Whisker manages its own tables. All tables are prefixed with `whisker_`:
+Whisker manages its own tables, all prefixed with `whisker_`:
 
-- `whisker_{collection}` — one table per document collection
-- `whisker_events` — single table for all event streams
+- `whisker_{collection}` - one table per document collection
+- `whisker_events` - single table for all event streams
 
 Tables are created lazily on first use. No migration files, no setup steps.
 
@@ -185,14 +185,9 @@ store, err := whisker.New(ctx, connString,
 ## Development
 
 ```bash
-# run unit tests
-go test ./...
-
-# run integration tests (requires Docker)
-go test -tags=integration ./...
-
-# start a local PostgreSQL
-docker compose up -d
+go test ./...                        # unit tests
+go test -tags=integration ./...      # integration tests (requires Docker)
+docker compose up -d                 # local PostgreSQL
 ```
 
 ## License
