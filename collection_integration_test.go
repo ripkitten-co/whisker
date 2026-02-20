@@ -62,3 +62,73 @@ func TestCollection_LoadNotFound(t *testing.T) {
 		t.Errorf("got %v, want ErrNotFound", err)
 	}
 }
+
+func TestCollection_UpdateWithConcurrency(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := whisker.Collection[User](store, "users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
+	user, _ := users.Load(ctx, "u1")
+
+	user.Name = "Bob"
+	err := users.Update(ctx, user)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if user.Version != 2 {
+		t.Errorf("version after update: got %d, want 2", user.Version)
+	}
+
+	reloaded, _ := users.Load(ctx, "u1")
+	if reloaded.Name != "Bob" {
+		t.Errorf("name: got %q, want %q", reloaded.Name, "Bob")
+	}
+}
+
+func TestCollection_UpdateConcurrencyConflict(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := whisker.Collection[User](store, "users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
+	user1, _ := users.Load(ctx, "u1")
+	user2, _ := users.Load(ctx, "u1")
+
+	user1.Name = "Bob"
+	users.Update(ctx, user1)
+
+	user2.Name = "Charlie"
+	err := users.Update(ctx, user2)
+	if !errors.Is(err, whisker.ErrConcurrencyConflict) {
+		t.Errorf("got %v, want ErrConcurrencyConflict", err)
+	}
+}
+
+func TestCollection_Delete(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := whisker.Collection[User](store, "users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
+	err := users.Delete(ctx, "u1")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	_, err = users.Load(ctx, "u1")
+	if !errors.Is(err, whisker.ErrNotFound) {
+		t.Errorf("got %v, want ErrNotFound", err)
+	}
+}
+
+func TestCollection_DeleteNotFound(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := whisker.Collection[User](store, "users")
+
+	err := users.Delete(ctx, "nonexistent")
+	if !errors.Is(err, whisker.ErrNotFound) {
+		t.Errorf("got %v, want ErrNotFound", err)
+	}
+}

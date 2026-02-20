@@ -66,6 +66,75 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 	return nil
 }
 
+func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	id, err := extractID(doc)
+	if err != nil {
+		return fmt.Errorf("collection %s: update: %w", c.name, err)
+	}
+
+	currentVersion, hasVersion := extractVersion(doc)
+	data, err := c.codec.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("collection %s: update %s: marshal: %w", c.name, id, err)
+	}
+
+	newVersion := currentVersion + 1
+	builder := psql.Update(c.table).
+		Set("data", data).
+		Set("version", newVersion).
+		Set("updated_at", sq.Expr("now()")).
+		Where(sq.Eq{"id": id})
+
+	if hasVersion {
+		builder = builder.Where(sq.Eq{"version": currentVersion})
+	}
+
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: update %s: build sql: %w", c.name, id, err)
+	}
+
+	tag, err := c.exec.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: update %s: %w", c.name, id, err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		if hasVersion {
+			return fmt.Errorf("collection %s: update %s: %w", c.name, id, ErrConcurrencyConflict)
+		}
+		return fmt.Errorf("collection %s: update %s: %w", c.name, id, ErrNotFound)
+	}
+
+	setVersion(doc, newVersion)
+	return nil
+}
+
+func (c *CollectionOf[T]) Delete(ctx context.Context, id string) error {
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	query, args, err := psql.Delete(c.table).Where(sq.Eq{"id": id}).ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: delete %s: build sql: %w", c.name, id, err)
+	}
+
+	tag, err := c.exec.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: delete %s: %w", c.name, id, err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("collection %s: delete %s: %w", c.name, id, ErrNotFound)
+	}
+	return nil
+}
+
 func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 	if err := c.ensure(ctx); err != nil {
 		return nil, err
