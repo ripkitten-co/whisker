@@ -132,3 +132,35 @@ func TestCollection_DeleteNotFound(t *testing.T) {
 		t.Errorf("got %v, want ErrNotFound", err)
 	}
 }
+
+func TestCollection_WhereQuery(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := whisker.Collection[User](store, "users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "alice@test.com"})
+	users.Insert(ctx, &User{ID: "u2", Name: "Bob", Email: "bob@test.com"})
+	users.Insert(ctx, &User{ID: "u3", Name: "Alice", Email: "alice2@test.com"})
+
+	results, err := users.Where("name", "=", "Alice").Execute(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+}
+
+func TestCollection_WhereQueryNoResults(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := whisker.Collection[User](store, "users")
+
+	results, err := users.Where("name", "=", "Nobody").Execute(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("got %d results, want 0", len(results))
+	}
+}
