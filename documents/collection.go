@@ -47,6 +47,9 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 	if err != nil {
 		return fmt.Errorf("collection %s: %w", c.name, err)
 	}
+	if id == "" {
+		return fmt.Errorf("collection %s: insert: ID must not be empty", c.name)
+	}
 
 	data, err := c.codec.Marshal(doc)
 	if err != nil {

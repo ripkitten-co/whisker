@@ -12,8 +12,9 @@ import (
 )
 
 type Session struct {
-	tx pgx.Tx
-	be backend
+	tx     pgx.Tx
+	be     backend
+	closed bool
 }
 
 func (s *Store) Session(ctx context.Context) (*Session, error) {
@@ -37,6 +38,10 @@ func (s *Session) JSONCodec() codecs.Codec            { return s.be.codec }
 func (s *Session) SchemaBootstrap() *schema.Bootstrap { return s.be.schema }
 
 func (s *Session) Commit(ctx context.Context) error {
+	if s.closed {
+		return fmt.Errorf("whisker: session already closed")
+	}
+	s.closed = true
 	if err := s.tx.Commit(ctx); err != nil {
 		return fmt.Errorf("whisker: commit session: %w", err)
 	}
@@ -44,10 +49,21 @@ func (s *Session) Commit(ctx context.Context) error {
 }
 
 func (s *Session) Rollback(ctx context.Context) error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	if err := s.tx.Rollback(ctx); err != nil {
 		return fmt.Errorf("whisker: rollback session: %w", err)
 	}
 	return nil
+}
+
+func (s *Session) Close(ctx context.Context) error {
+	if s.closed {
+		return nil
+	}
+	return s.Rollback(ctx)
 }
 
 type txExecutor struct {

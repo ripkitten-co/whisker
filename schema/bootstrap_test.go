@@ -3,7 +3,7 @@ package schema
 import "testing"
 
 func TestCollectionDDL(t *testing.T) {
-	ddl := CollectionDDL("users")
+	ddl := collectionDDL("users")
 	want := `CREATE TABLE IF NOT EXISTS whisker_users (
 	id TEXT PRIMARY KEY,
 	data JSONB NOT NULL,
@@ -17,7 +17,7 @@ func TestCollectionDDL(t *testing.T) {
 }
 
 func TestEventsDDL(t *testing.T) {
-	ddl := EventsDDL()
+	ddl := eventsDDL()
 	want := `CREATE TABLE IF NOT EXISTS whisker_events (
 	stream_id TEXT NOT NULL,
 	version INTEGER NOT NULL,

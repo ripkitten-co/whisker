@@ -44,8 +44,17 @@ func (c *CollectionOf[T]) Where(field, op string, value any) *Query[T] {
 }
 
 func (q *Query[T]) Where(field, op string, value any) *Query[T] {
-	q.conditions = append(q.conditions, condition{field, op, value})
-	return q
+	conds := make([]condition, len(q.conditions), len(q.conditions)+1)
+	copy(conds, q.conditions)
+	conds = append(conds, condition{field, op, value})
+	return &Query[T]{
+		name:       q.name,
+		table:      q.table,
+		exec:       q.exec,
+		codec:      q.codec,
+		schema:     q.schema,
+		conditions: conds,
+	}
 }
 
 func (q *Query[T]) toSQL() (string, []any, error) {

@@ -2,10 +2,12 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/internal/pg"
 	"github.com/ripkitten-co/whisker/schema"
@@ -35,6 +37,10 @@ func New(b whisker.Backend) *Store {
 }
 
 func (es *Store) Append(ctx context.Context, streamID string, expectedVersion int, evts []Event) error {
+	if len(evts) == 0 {
+		return fmt.Errorf("events: append %s: at least one event required", streamID)
+	}
+
 	if err := es.schema.EnsureEvents(ctx, es.exec); err != nil {
 		return err
 	}
@@ -54,25 +60,29 @@ func (es *Store) Append(ctx context.Context, streamID string, expectedVersion in
 		}
 	}
 
+	builder := psql.Insert("whisker_events").
+		Columns("stream_id", "version", "type", "data", "metadata")
+
 	for i, evt := range evts {
 		version := expectedVersion + i + 1
+		builder = builder.Values(streamID, version, evt.Type, evt.Data, evt.Metadata)
+	}
 
-		sql, args, err := psql.
-			Insert("whisker_events").
-			Columns("stream_id", "version", "type", "data", "metadata").
-			Values(streamID, version, evt.Type, evt.Data, evt.Metadata).
-			ToSql()
-		if err != nil {
-			return fmt.Errorf("events: append %s: build sql: %w", streamID, err)
-		}
+	sql, args, err := builder.ToSql()
+	if err != nil {
+		return fmt.Errorf("events: append %s: build sql: %w", streamID, err)
+	}
 
-		_, err = es.exec.Exec(ctx, sql, args...)
-		if err != nil {
+	_, err = es.exec.Exec(ctx, sql, args...)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			if expectedVersion == 0 {
 				return fmt.Errorf("events: append %s: %w", streamID, whisker.ErrStreamExists)
 			}
-			return fmt.Errorf("events: append %s: %w", streamID, err)
+			return fmt.Errorf("events: append %s: %w", streamID, whisker.ErrConcurrencyConflict)
 		}
+		return fmt.Errorf("events: append %s: %w", streamID, err)
 	}
 
 	return nil
@@ -113,5 +123,9 @@ func (es *Store) ReadStream(ctx context.Context, streamID string, fromVersion in
 		result = append(result, e)
 	}
 
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("events: read %s: %w", streamID, err)
+	}
+
+	return result, nil
 }

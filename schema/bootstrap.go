@@ -9,16 +9,16 @@ import (
 	"github.com/ripkitten-co/whisker/internal/pg"
 )
 
-var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*$`)
+var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,54}$`)
 
 func ValidateCollectionName(name string) error {
 	if !validName.MatchString(name) {
-		return fmt.Errorf("schema: invalid collection name %q: must be alphanumeric with underscores", name)
+		return fmt.Errorf("schema: invalid collection name %q: must be alphanumeric with underscores, max 55 chars", name)
 	}
 	return nil
 }
 
-func CollectionDDL(name string) string {
+func collectionDDL(name string) string {
 	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS whisker_%s (
 	id TEXT PRIMARY KEY,
 	data JSONB NOT NULL,
@@ -28,7 +28,7 @@ func CollectionDDL(name string) string {
 )`, name)
 }
 
-func EventsDDL() string {
+func eventsDDL() string {
 	return `CREATE TABLE IF NOT EXISTS whisker_events (
 	stream_id TEXT NOT NULL,
 	version INTEGER NOT NULL,
@@ -41,24 +41,20 @@ func EventsDDL() string {
 }
 
 type Bootstrap struct {
-	mu      sync.Mutex
-	created map[string]bool
+	tables sync.Map
 }
 
 func New() *Bootstrap {
-	return &Bootstrap{created: make(map[string]bool)}
+	return &Bootstrap{}
 }
 
 func (b *Bootstrap) IsCreated(table string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.created[table]
+	_, ok := b.tables.Load(table)
+	return ok
 }
 
 func (b *Bootstrap) MarkCreated(table string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.created[table] = true
+	b.tables.Store(table, true)
 }
 
 func (b *Bootstrap) EnsureCollection(ctx context.Context, exec pg.Executor, name string) error {
@@ -66,29 +62,25 @@ func (b *Bootstrap) EnsureCollection(ctx context.Context, exec pg.Executor, name
 		return err
 	}
 	table := "whisker_" + name
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.created[table] {
+	if _, ok := b.tables.Load(table); ok {
 		return nil
 	}
-	_, err := exec.Exec(ctx, CollectionDDL(name))
+	_, err := exec.Exec(ctx, collectionDDL(name))
 	if err != nil {
 		return fmt.Errorf("schema: create table %s: %w", table, err)
 	}
-	b.created[table] = true
+	b.tables.Store(table, true)
 	return nil
 }
 
 func (b *Bootstrap) EnsureEvents(ctx context.Context, exec pg.Executor) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.created["whisker_events"] {
+	if _, ok := b.tables.Load("whisker_events"); ok {
 		return nil
 	}
-	_, err := exec.Exec(ctx, EventsDDL())
+	_, err := exec.Exec(ctx, eventsDDL())
 	if err != nil {
 		return fmt.Errorf("schema: create events table: %w", err)
 	}
-	b.created["whisker_events"] = true
+	b.tables.Store("whisker_events", true)
 	return nil
 }
