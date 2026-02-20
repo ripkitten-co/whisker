@@ -29,7 +29,7 @@ func New(ctx context.Context, connString string, opts ...Option) (*Store, error)
 		pool: pool,
 		be: backend{
 			exec:   pool,
-			codec:  cfg.codec,
+			codec:  codecs.NewWhisker(cfg.codec),
 			schema: schema.New(),
 		},
 	}

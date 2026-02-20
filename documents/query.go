@@ -6,8 +6,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/ripkitten-co/whisker/internal/codecs"
+	"github.com/ripkitten-co/whisker/internal/meta"
 	"github.com/ripkitten-co/whisker/internal/pg"
-	"github.com/ripkitten-co/whisker/internal/tags"
 	"github.com/ripkitten-co/whisker/schema"
 )
 
@@ -91,7 +91,8 @@ func (q *Query[T]) Execute(ctx context.Context) ([]*T, error) {
 		if err := q.codec.Unmarshal(data, &doc); err != nil {
 			return nil, fmt.Errorf("query: unmarshal: %w", err)
 		}
-		tags.SetVersion(&doc, version)
+		meta.SetID(&doc, id)
+		meta.SetVersion(&doc, version)
 		results = append(results, &doc)
 	}
 

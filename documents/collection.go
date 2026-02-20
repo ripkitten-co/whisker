@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/internal/codecs"
+	"github.com/ripkitten-co/whisker/internal/meta"
 	"github.com/ripkitten-co/whisker/internal/pg"
-	"github.com/ripkitten-co/whisker/internal/tags"
 	"github.com/ripkitten-co/whisker/schema"
 )
 
@@ -43,7 +43,7 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 		return err
 	}
 
-	id, err := tags.ExtractID(doc)
+	id, err := meta.ExtractID(doc)
 	if err != nil {
 		return fmt.Errorf("collection %s: %w", c.name, err)
 	}
@@ -63,7 +63,7 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 		return fmt.Errorf("collection %s: insert %s: %w", c.name, id, err)
 	}
 
-	tags.SetVersion(doc, 1)
+	meta.SetVersion(doc, 1)
 	return nil
 }
 
@@ -72,12 +72,12 @@ func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
 		return err
 	}
 
-	id, err := tags.ExtractID(doc)
+	id, err := meta.ExtractID(doc)
 	if err != nil {
 		return fmt.Errorf("collection %s: update: %w", c.name, err)
 	}
 
-	currentVersion, hasVersion := tags.ExtractVersion(doc)
+	currentVersion, hasVersion := meta.ExtractVersion(doc)
 	data, err := c.codec.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("collection %s: update %s: marshal: %w", c.name, id, err)
@@ -111,7 +111,7 @@ func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
 		return fmt.Errorf("collection %s: update %s: %w", c.name, id, whisker.ErrNotFound)
 	}
 
-	tags.SetVersion(doc, newVersion)
+	meta.SetVersion(doc, newVersion)
 	return nil
 }
 
@@ -161,6 +161,7 @@ func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 		return nil, fmt.Errorf("collection %s: load %s: unmarshal: %w", c.name, id, err)
 	}
 
-	tags.SetVersion(&doc, version)
+	meta.SetID(&doc, id)
+	meta.SetVersion(&doc, version)
 	return &doc, nil
 }
