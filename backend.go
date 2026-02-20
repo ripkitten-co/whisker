@@ -13,5 +13,7 @@ type backend struct {
 }
 
 type Backend interface {
-	whiskerBackend() *backend
+	DBExecutor() pg.Executor
+	JSONCodec() codecs.Codec
+	SchemaBootstrap() *schema.Bootstrap
 }

@@ -1,4 +1,4 @@
-package whisker
+package documents
 
 import (
 	"context"
@@ -7,8 +7,10 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/internal/codecs"
 	"github.com/ripkitten-co/whisker/internal/pg"
+	"github.com/ripkitten-co/whisker/internal/tags"
 	"github.com/ripkitten-co/whisker/schema"
 )
 
@@ -22,14 +24,13 @@ type CollectionOf[T any] struct {
 	schema *schema.Bootstrap
 }
 
-func Collection[T any](b Backend, name string) *CollectionOf[T] {
-	be := b.whiskerBackend()
+func Collection[T any](b whisker.Backend, name string) *CollectionOf[T] {
 	return &CollectionOf[T]{
 		name:   name,
 		table:  "whisker_" + name,
-		exec:   be.exec,
-		codec:  be.codec,
-		schema: be.schema,
+		exec:   b.DBExecutor(),
+		codec:  b.JSONCodec(),
+		schema: b.SchemaBootstrap(),
 	}
 }
 
@@ -42,7 +43,7 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 		return err
 	}
 
-	id, err := extractID(doc)
+	id, err := tags.ExtractID(doc)
 	if err != nil {
 		return fmt.Errorf("collection %s: %w", c.name, err)
 	}
@@ -62,7 +63,7 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 		return fmt.Errorf("collection %s: insert %s: %w", c.name, id, err)
 	}
 
-	setVersion(doc, 1)
+	tags.SetVersion(doc, 1)
 	return nil
 }
 
@@ -71,12 +72,12 @@ func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
 		return err
 	}
 
-	id, err := extractID(doc)
+	id, err := tags.ExtractID(doc)
 	if err != nil {
 		return fmt.Errorf("collection %s: update: %w", c.name, err)
 	}
 
-	currentVersion, hasVersion := extractVersion(doc)
+	currentVersion, hasVersion := tags.ExtractVersion(doc)
 	data, err := c.codec.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("collection %s: update %s: marshal: %w", c.name, id, err)
@@ -105,12 +106,12 @@ func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
 
 	if tag.RowsAffected() == 0 {
 		if hasVersion {
-			return fmt.Errorf("collection %s: update %s: %w", c.name, id, ErrConcurrencyConflict)
+			return fmt.Errorf("collection %s: update %s: %w", c.name, id, whisker.ErrConcurrencyConflict)
 		}
-		return fmt.Errorf("collection %s: update %s: %w", c.name, id, ErrNotFound)
+		return fmt.Errorf("collection %s: update %s: %w", c.name, id, whisker.ErrNotFound)
 	}
 
-	setVersion(doc, newVersion)
+	tags.SetVersion(doc, newVersion)
 	return nil
 }
 
@@ -130,7 +131,7 @@ func (c *CollectionOf[T]) Delete(ctx context.Context, id string) error {
 	}
 
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("collection %s: delete %s: %w", c.name, id, ErrNotFound)
+		return fmt.Errorf("collection %s: delete %s: %w", c.name, id, whisker.ErrNotFound)
 	}
 	return nil
 }
@@ -150,7 +151,7 @@ func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 	err = c.exec.QueryRow(ctx, sql, args...).Scan(&data, &version)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("collection %s: load %s: %w", c.name, id, ErrNotFound)
+			return nil, fmt.Errorf("collection %s: load %s: %w", c.name, id, whisker.ErrNotFound)
 		}
 		return nil, fmt.Errorf("collection %s: load %s: %w", c.name, id, err)
 	}
@@ -160,6 +161,6 @@ func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 		return nil, fmt.Errorf("collection %s: load %s: unmarshal: %w", c.name, id, err)
 	}
 
-	setVersion(&doc, version)
+	tags.SetVersion(&doc, version)
 	return &doc, nil
 }

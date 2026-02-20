@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ripkitten-co/whisker/internal/codecs"
 	"github.com/ripkitten-co/whisker/internal/pg"
 	"github.com/ripkitten-co/whisker/schema"
 )
@@ -39,6 +40,6 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
-func (s *Store) whiskerBackend() *backend {
-	return &s.be
-}
+func (s *Store) DBExecutor() pg.Executor            { return s.be.exec }
+func (s *Store) JSONCodec() codecs.Codec            { return s.be.codec }
+func (s *Store) SchemaBootstrap() *schema.Bootstrap { return s.be.schema }

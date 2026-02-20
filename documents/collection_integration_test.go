@@ -1,6 +1,6 @@
 //go:build integration
 
-package whisker_test
+package documents_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ripkitten-co/whisker"
+	"github.com/ripkitten-co/whisker/documents"
 	"github.com/ripkitten-co/whisker/internal/testutil"
 )
 
@@ -32,7 +33,7 @@ func setupStore(t *testing.T) *whisker.Store {
 func TestCollection_InsertAndLoad(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	err := users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "alice@test.com"})
 	if err != nil {
@@ -55,7 +56,7 @@ func TestCollection_InsertAndLoad(t *testing.T) {
 func TestCollection_LoadNotFound(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	_, err := users.Load(ctx, "nonexistent")
 	if !errors.Is(err, whisker.ErrNotFound) {
@@ -66,7 +67,7 @@ func TestCollection_LoadNotFound(t *testing.T) {
 func TestCollection_UpdateWithConcurrency(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
 	user, _ := users.Load(ctx, "u1")
@@ -89,7 +90,7 @@ func TestCollection_UpdateWithConcurrency(t *testing.T) {
 func TestCollection_UpdateConcurrencyConflict(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
 	user1, _ := users.Load(ctx, "u1")
@@ -108,7 +109,7 @@ func TestCollection_UpdateConcurrencyConflict(t *testing.T) {
 func TestCollection_Delete(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
 	err := users.Delete(ctx, "u1")
@@ -125,7 +126,7 @@ func TestCollection_Delete(t *testing.T) {
 func TestCollection_DeleteNotFound(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	err := users.Delete(ctx, "nonexistent")
 	if !errors.Is(err, whisker.ErrNotFound) {
@@ -136,7 +137,7 @@ func TestCollection_DeleteNotFound(t *testing.T) {
 func TestCollection_WhereQuery(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "alice@test.com"})
 	users.Insert(ctx, &User{ID: "u2", Name: "Bob", Email: "bob@test.com"})
@@ -154,7 +155,7 @@ func TestCollection_WhereQuery(t *testing.T) {
 func TestCollection_WhereQueryNoResults(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()
-	users := whisker.Collection[User](store, "users")
+	users := documents.Collection[User](store, "users")
 
 	results, err := users.Where("name", "=", "Nobody").Execute(ctx)
 	if err != nil {

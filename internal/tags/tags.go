@@ -1,11 +1,11 @@
-package whisker
+package tags
 
 import (
 	"fmt"
 	"reflect"
 )
 
-func extractID(doc any) (string, error) {
+func ExtractID(doc any) (string, error) {
 	v := reflect.ValueOf(doc)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
@@ -19,7 +19,7 @@ func extractID(doc any) (string, error) {
 	return "", fmt.Errorf("whisker: no field with whisker:\"id\" tag in %s", t.Name())
 }
 
-func extractVersion(doc any) (int, bool) {
+func ExtractVersion(doc any) (int, bool) {
 	v := reflect.ValueOf(doc)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
@@ -33,7 +33,7 @@ func extractVersion(doc any) (int, bool) {
 	return 0, false
 }
 
-func setVersion(doc any, version int) {
+func SetVersion(doc any, version int) {
 	v := reflect.ValueOf(doc)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()

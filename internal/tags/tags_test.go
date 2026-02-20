@@ -1,4 +1,4 @@
-package whisker
+package tags
 
 import "testing"
 
@@ -19,9 +19,9 @@ type noIDDoc struct {
 
 func TestExtractID(t *testing.T) {
 	doc := &taggedDoc{ID: "abc", Name: "Alice", Version: 1}
-	id, err := extractID(doc)
+	id, err := ExtractID(doc)
 	if err != nil {
-		t.Fatalf("extractID: %v", err)
+		t.Fatalf("ExtractID: %v", err)
 	}
 	if id != "abc" {
 		t.Errorf("got %q, want %q", id, "abc")
@@ -30,7 +30,7 @@ func TestExtractID(t *testing.T) {
 
 func TestExtractID_Missing(t *testing.T) {
 	doc := &noIDDoc{Name: "Alice"}
-	_, err := extractID(doc)
+	_, err := ExtractID(doc)
 	if err == nil {
 		t.Fatal("expected error for missing whisker:\"id\" tag")
 	}
@@ -38,7 +38,7 @@ func TestExtractID_Missing(t *testing.T) {
 
 func TestExtractVersion(t *testing.T) {
 	doc := &taggedDoc{ID: "abc", Name: "Alice", Version: 5}
-	v, ok := extractVersion(doc)
+	v, ok := ExtractVersion(doc)
 	if !ok {
 		t.Fatal("expected version field to be found")
 	}
@@ -49,7 +49,7 @@ func TestExtractVersion(t *testing.T) {
 
 func TestExtractVersion_Missing(t *testing.T) {
 	doc := &noVersionDoc{ID: "abc", Name: "Alice"}
-	_, ok := extractVersion(doc)
+	_, ok := ExtractVersion(doc)
 	if ok {
 		t.Fatal("expected version field to not be found")
 	}
@@ -57,7 +57,7 @@ func TestExtractVersion_Missing(t *testing.T) {
 
 func TestSetVersion(t *testing.T) {
 	doc := &taggedDoc{ID: "abc", Version: 1}
-	setVersion(doc, 3)
+	SetVersion(doc, 3)
 	if doc.Version != 3 {
 		t.Errorf("got %d, want 3", doc.Version)
 	}

@@ -1,4 +1,4 @@
-package whisker
+package documents
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"github.com/ripkitten-co/whisker/internal/codecs"
 	"github.com/ripkitten-co/whisker/internal/pg"
+	"github.com/ripkitten-co/whisker/internal/tags"
 	"github.com/ripkitten-co/whisker/schema"
 )
 
@@ -90,7 +91,7 @@ func (q *Query[T]) Execute(ctx context.Context) ([]*T, error) {
 		if err := q.codec.Unmarshal(data, &doc); err != nil {
 			return nil, fmt.Errorf("query: unmarshal: %w", err)
 		}
-		setVersion(&doc, version)
+		tags.SetVersion(&doc, version)
 		results = append(results, &doc)
 	}
 

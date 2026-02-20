@@ -1,4 +1,4 @@
-package whisker
+package documents
 
 import "testing"
 
