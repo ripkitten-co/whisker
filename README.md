@@ -11,6 +11,7 @@ A PostgreSQL-powered document store and event sourcing library for Go. Zero migr
 - **Event Streams** — Append-only event sourcing with expected version checks
 - **Sessions** — Unit of Work pattern wrapping a PostgreSQL transaction for atomic operations across documents and events
 - **Zero Migrations** — Tables are created automatically via `CREATE TABLE IF NOT EXISTS`
+- **Convention Over Configuration** — Plain Go structs, no tags required. ID and Version detected by field name, camelCase JSONB keys
 - **Swappable Codecs** — JSON serialization is pluggable (jsoniter by default)
 
 ## Install
@@ -37,10 +38,10 @@ import (
 )
 
 type User struct {
-	ID      string `whisker:"id" json:"id"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-	Version int    `whisker:"version" json:"-"`
+	ID      string
+	Name    string
+	Email   string
+	Version int
 }
 
 func main() {
@@ -82,20 +83,27 @@ func main() {
 
 ## Documents
 
-Collections are typed with Go generics. Mark your ID and version fields with struct tags:
+Collections are typed with Go generics. Just use plain Go structs:
 
 ```go
 type Order struct {
-	ID      string `whisker:"id" json:"id"`
-	Item    string `json:"item"`
-	Total   int    `json:"total"`
-	Version int    `whisker:"version" json:"-"`
+	ID      string
+	Item    string
+	Total   int
+	Version int
 }
 
 orders := documents.Collection[Order](store, "orders")
 ```
 
-The `whisker:"version"` tag enables optimistic concurrency — updates check `WHERE version = $current` and increment automatically. If another writer changed the document, you get `whisker.ErrConcurrencyConflict`. Omit the version tag to skip concurrency checking.
+Whisker detects fields by convention:
+- `ID` field — document identity (stored in its own column, excluded from JSONB)
+- `Version` field — optimistic concurrency (stored in its own column, excluded from JSONB)
+- All other fields — stored as camelCase JSONB keys (`FirstName` → `"firstName"`)
+
+A `Version` field (type `int`) enables optimistic concurrency — updates check `WHERE version = $current` and increment automatically. If another writer changed the document, you get `whisker.ErrConcurrencyConflict`. Omit the `Version` field to skip concurrency checking.
+
+Use `whisker:"id"` or `whisker:"version"` tags to override which field is used. Use `json` tags to override JSONB key names.
 
 ### CRUD
 
