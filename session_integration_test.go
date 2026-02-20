@@ -14,9 +14,9 @@ import (
 )
 
 type Order struct {
-	ID      string `whisker:"id" json:"id"`
-	Item    string `json:"item"`
-	Version int    `whisker:"version" json:"-"`
+	ID      string
+	Item    string
+	Version int
 }
 
 func setupStore(t *testing.T) *whisker.Store {

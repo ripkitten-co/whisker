@@ -13,10 +13,10 @@ import (
 )
 
 type User struct {
-	ID      string `whisker:"id" json:"id"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-	Version int    `whisker:"version" json:"-"`
+	ID      string
+	Name    string
+	Email   string
+	Version int
 }
 
 func setupStore(t *testing.T) *whisker.Store {
@@ -163,5 +163,41 @@ func TestCollection_WhereQueryNoResults(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("got %d results, want 0", len(results))
+	}
+}
+
+type TagOverrideUser struct {
+	Key     string `whisker:"id"`
+	Name    string `json:"display_name"`
+	Version int
+}
+
+func TestCollection_TagOverrides(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[TagOverrideUser](store, "tag_users")
+
+	err := users.Insert(ctx, &TagOverrideUser{Key: "u1", Name: "Alice"})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	got, err := users.Load(ctx, "u1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Key != "u1" || got.Name != "Alice" {
+		t.Errorf("got %+v", got)
+	}
+	if got.Version != 1 {
+		t.Errorf("version: got %d, want 1", got.Version)
+	}
+
+	results, err := users.Where("display_name", "=", "Alice").Execute(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("got %d results, want 1", len(results))
 	}
 }

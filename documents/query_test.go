@@ -3,9 +3,9 @@ package documents
 import "testing"
 
 type testDoc struct {
-	ID      string `whisker:"id" json:"id"`
-	Name    string `json:"name"`
-	Version int    `whisker:"version"`
+	ID      string
+	Name    string
+	Version int
 }
 
 func TestQuery_WhereBuildsSQL(t *testing.T) {
