@@ -63,3 +63,15 @@ func TestBootstrap_TracksCreated(t *testing.T) {
 		t.Error("should be created")
 	}
 }
+
+func TestBootstrap_TracksIndexes(t *testing.T) {
+	b := New()
+	name := "idx_whisker_users_name"
+	if b.IsIndexCreated(name) {
+		t.Error("should not be created yet")
+	}
+	b.MarkIndexCreated(name)
+	if !b.IsIndexCreated(name) {
+		t.Error("should be created")
+	}
+}

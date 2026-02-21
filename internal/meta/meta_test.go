@@ -42,6 +42,33 @@ type unexportedDoc struct {
 	Version int
 }
 
+type btreeIndexDoc struct {
+	ID      string `whisker:"id"`
+	Name    string `whisker:"index"`
+	Email   string `whisker:"index"`
+	Version int    `whisker:"version"`
+}
+
+type ginIndexDoc struct {
+	ID      string   `whisker:"id"`
+	Tags    []string `whisker:"index,gin"`
+	Version int      `whisker:"version"`
+}
+
+type mixedIndexDoc struct {
+	ID      string   `whisker:"id"`
+	Name    string   `whisker:"index"`
+	Tags    []string `whisker:"index,gin"`
+	Payload []byte   `whisker:"index,gin"`
+	Version int      `whisker:"version"`
+}
+
+type noIndexDoc struct {
+	ID      string
+	Name    string
+	Version int
+}
+
 func TestToCamelCase(t *testing.T) {
 	tests := []struct {
 		in, want string
@@ -225,5 +252,58 @@ func TestSetID_NonStringID(t *testing.T) {
 	SetID(doc, "123")
 	if doc.ID != 0 {
 		t.Error("SetID should be no-op for non-string ID fields")
+	}
+}
+
+func TestAnalyze_BtreeIndexes(t *testing.T) {
+	m := Analyze[btreeIndexDoc]()
+	if len(m.Indexes) != 2 {
+		t.Fatalf("len(Indexes) = %d, want 2", len(m.Indexes))
+	}
+	if m.Indexes[0].Type != IndexBtree || m.Indexes[0].FieldJSONKey != "name" {
+		t.Errorf("Indexes[0] = %+v, want btree on 'name'", m.Indexes[0])
+	}
+	if m.Indexes[1].Type != IndexBtree || m.Indexes[1].FieldJSONKey != "email" {
+		t.Errorf("Indexes[1] = %+v, want btree on 'email'", m.Indexes[1])
+	}
+	if len(m.Fields) != 2 {
+		t.Errorf("len(Fields) = %d, want 2 (index fields are still data)", len(m.Fields))
+	}
+}
+
+func TestAnalyze_GINIndex(t *testing.T) {
+	m := Analyze[ginIndexDoc]()
+	if len(m.Indexes) != 1 {
+		t.Fatalf("len(Indexes) = %d, want 1", len(m.Indexes))
+	}
+	if m.Indexes[0].Type != IndexGIN || m.Indexes[0].FieldJSONKey != "" {
+		t.Errorf("Indexes[0] = %+v, want GIN with empty FieldJSONKey", m.Indexes[0])
+	}
+}
+
+func TestAnalyze_MixedIndexes_GINDedup(t *testing.T) {
+	m := Analyze[mixedIndexDoc]()
+	btreeCount := 0
+	ginCount := 0
+	for _, idx := range m.Indexes {
+		switch idx.Type {
+		case IndexBtree:
+			btreeCount++
+		case IndexGIN:
+			ginCount++
+		}
+	}
+	if btreeCount != 1 {
+		t.Errorf("btree indexes = %d, want 1", btreeCount)
+	}
+	if ginCount != 1 {
+		t.Errorf("GIN indexes = %d, want 1 (deduplicated)", ginCount)
+	}
+}
+
+func TestAnalyze_NoIndexes(t *testing.T) {
+	m := Analyze[noIndexDoc]()
+	if len(m.Indexes) != 0 {
+		t.Errorf("len(Indexes) = %d, want 0", len(m.Indexes))
 	}
 }

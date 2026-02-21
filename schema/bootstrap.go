@@ -41,7 +41,8 @@ func eventsDDL() string {
 }
 
 type Bootstrap struct {
-	tables sync.Map
+	tables  sync.Map
+	indexes sync.Map
 }
 
 func New() *Bootstrap {
@@ -55,6 +56,15 @@ func (b *Bootstrap) IsCreated(table string) bool {
 
 func (b *Bootstrap) MarkCreated(table string) {
 	b.tables.Store(table, true)
+}
+
+func (b *Bootstrap) IsIndexCreated(name string) bool {
+	_, ok := b.indexes.Load(name)
+	return ok
+}
+
+func (b *Bootstrap) MarkIndexCreated(name string) {
+	b.indexes.Store(name, true)
 }
 
 func (b *Bootstrap) EnsureCollection(ctx context.Context, exec pg.Executor, name string) error {
