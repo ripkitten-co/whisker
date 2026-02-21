@@ -15,6 +15,10 @@ type Executor interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+type Transactional interface {
+	InTransaction() bool
+}
+
 type Pool struct {
 	pool *pgxpool.Pool
 }
