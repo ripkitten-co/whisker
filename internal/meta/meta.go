@@ -12,11 +12,24 @@ type StructMeta struct {
 	IDIndex      int
 	VersionIndex int
 	Fields       []FieldMeta
+	Indexes      []IndexMeta
 }
 
 type FieldMeta struct {
 	Index   int
 	JSONKey string
+}
+
+type IndexType int
+
+const (
+	IndexBtree IndexType = iota
+	IndexGIN
+)
+
+type IndexMeta struct {
+	FieldJSONKey string
+	Type         IndexType
 }
 
 var cache sync.Map
@@ -42,6 +55,7 @@ func analyze(t reflect.Type) *StructMeta {
 	applyWhiskerTags(t, m)
 	applyConventionDefaults(t, m)
 	collectDataFields(t, m)
+	collectIndexes(t, m)
 	return m
 }
 
@@ -80,6 +94,14 @@ func applyConventionDefaults(t reflect.Type, m *StructMeta) {
 	}
 }
 
+func jsonKeyForField(f reflect.StructField) string {
+	key := jsonKeyFromTag(f.Tag.Get("json"))
+	if key == "" {
+		key = toCamelCase(f.Name)
+	}
+	return key
+}
+
 func collectDataFields(t reflect.Type, m *StructMeta) {
 	for i := 0; i < t.NumField(); i++ {
 		if i == m.IDIndex || i == m.VersionIndex {
@@ -89,16 +111,34 @@ func collectDataFields(t reflect.Type, m *StructMeta) {
 		if !f.IsExported() {
 			continue
 		}
-		jsonTag := f.Tag.Get("json")
-		if jsonTag == "-" {
+		if f.Tag.Get("json") == "-" {
 			continue
 		}
+		m.Fields = append(m.Fields, FieldMeta{Index: i, JSONKey: jsonKeyForField(f)})
+	}
+}
 
-		key := jsonKeyFromTag(jsonTag)
-		if key == "" {
-			key = toCamelCase(f.Name)
+func collectIndexes(t reflect.Type, m *StructMeta) {
+	hasGIN := false
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
 		}
-		m.Fields = append(m.Fields, FieldMeta{Index: i, JSONKey: key})
+		if f.Tag.Get("json") == "-" {
+			continue
+		}
+		tag := f.Tag.Get("whisker")
+		switch tag {
+		case "index":
+			key := jsonKeyForField(f)
+			m.Indexes = append(m.Indexes, IndexMeta{FieldJSONKey: key, Type: IndexBtree})
+		case "index,gin":
+			if !hasGIN {
+				m.Indexes = append(m.Indexes, IndexMeta{Type: IndexGIN})
+				hasGIN = true
+			}
+		}
 	}
 }
 
