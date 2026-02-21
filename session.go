@@ -81,3 +81,5 @@ func (t txExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Row
 func (t txExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return t.tx.QueryRow(ctx, sql, args...)
 }
+
+func (t txExecutor) InTransaction() bool { return true }

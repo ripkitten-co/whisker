@@ -166,6 +166,20 @@ func TestCollection_WhereQueryNoResults(t *testing.T) {
 	}
 }
 
+type IndexedUser struct {
+	ID      string `whisker:"id"`
+	Name    string `whisker:"index"`
+	Email   string `whisker:"index"`
+	Version int    `whisker:"version"`
+}
+
+type GINUser struct {
+	ID      string `whisker:"id"`
+	Name    string
+	Tags    []string `whisker:"index,gin"`
+	Version int      `whisker:"version"`
+}
+
 type TagOverrideUser struct {
 	Key     string `whisker:"id"`
 	Name    string `json:"display_name"`
@@ -199,5 +213,94 @@ func TestCollection_TagOverrides(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Errorf("got %d results, want 1", len(results))
+	}
+}
+
+func TestCollection_BtreeIndexesCreated(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[IndexedUser](store, "idx_users")
+
+	err := users.Insert(ctx, &IndexedUser{ID: "u1", Name: "Alice", Email: "alice@test.com"})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var count int
+	err = store.DBExecutor().QueryRow(ctx,
+		"SELECT count(*) FROM pg_indexes WHERE tablename = 'whisker_idx_users' AND indexname LIKE 'idx_whisker_idx_users_%'",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query pg_indexes: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("index count = %d, want 2 (name + email)", count)
+	}
+}
+
+func TestCollection_GINIndexCreated(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[GINUser](store, "gin_users")
+
+	err := users.Insert(ctx, &GINUser{ID: "u1", Name: "Alice", Tags: []string{"admin"}})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var count int
+	err = store.DBExecutor().QueryRow(ctx,
+		"SELECT count(*) FROM pg_indexes WHERE tablename = 'whisker_gin_users' AND indexname = 'idx_whisker_gin_users_data_gin'",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query pg_indexes: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("GIN index count = %d, want 1", count)
+	}
+}
+
+func TestCollection_SessionSkipsIndexCreation(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	sess, err := store.Session(ctx)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close(ctx)
+
+	users := documents.Collection[IndexedUser](sess, "sess_idx_users")
+	err = users.Insert(ctx, &IndexedUser{ID: "u1", Name: "Alice", Email: "alice@test.com"})
+	if err != nil {
+		t.Fatalf("insert in session: %v", err)
+	}
+	sess.Commit(ctx)
+
+	var count int
+	err = store.DBExecutor().QueryRow(ctx,
+		"SELECT count(*) FROM pg_indexes WHERE tablename = 'whisker_sess_idx_users' AND indexname LIKE 'idx_whisker_%'",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query pg_indexes: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("index count = %d, want 0 (should be skipped in transaction)", count)
+	}
+
+	users2 := documents.Collection[IndexedUser](store, "sess_idx_users")
+	_, err = users2.Load(ctx, "u1")
+	if err != nil {
+		t.Fatalf("load outside session: %v", err)
+	}
+
+	err = store.DBExecutor().QueryRow(ctx,
+		"SELECT count(*) FROM pg_indexes WHERE tablename = 'whisker_sess_idx_users' AND indexname LIKE 'idx_whisker_%'",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query pg_indexes after non-tx use: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("index count = %d, want 2 (created outside transaction)", count)
 	}
 }
