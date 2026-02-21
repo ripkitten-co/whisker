@@ -39,8 +39,13 @@ func AnalyzeType(t reflect.Type) *StructMeta {
 
 func analyze(t reflect.Type) *StructMeta {
 	m := &StructMeta{IDIndex: -1, VersionIndex: -1}
+	applyWhiskerTags(t, m)
+	applyConventionDefaults(t, m)
+	collectDataFields(t, m)
+	return m
+}
 
-	// pass 1: whisker tags
+func applyWhiskerTags(t reflect.Type, m *StructMeta) {
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		if !f.IsExported() {
@@ -53,8 +58,9 @@ func analyze(t reflect.Type) *StructMeta {
 			m.VersionIndex = i
 		}
 	}
+}
 
-	// pass 2: convention-based fallback
+func applyConventionDefaults(t reflect.Type, m *StructMeta) {
 	if m.IDIndex == -1 {
 		for i := 0; i < t.NumField(); i++ {
 			if t.Field(i).Name == "ID" {
@@ -72,8 +78,9 @@ func analyze(t reflect.Type) *StructMeta {
 			}
 		}
 	}
+}
 
-	// pass 3: collect data fields
+func collectDataFields(t reflect.Type, m *StructMeta) {
 	for i := 0; i < t.NumField(); i++ {
 		if i == m.IDIndex || i == m.VersionIndex {
 			continue
@@ -93,8 +100,6 @@ func analyze(t reflect.Type) *StructMeta {
 		}
 		m.Fields = append(m.Fields, FieldMeta{Index: i, JSONKey: key})
 	}
-
-	return m
 }
 
 func jsonKeyFromTag(tag string) string {
