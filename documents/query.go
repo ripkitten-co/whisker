@@ -29,6 +29,7 @@ type Query[T any] struct {
 	exec       pg.Executor
 	codec      codecs.Codec
 	schema     *schema.Bootstrap
+	indexes    []meta.IndexMeta
 	conditions []condition
 }
 
@@ -39,6 +40,7 @@ func (c *CollectionOf[T]) Where(field, op string, value any) *Query[T] {
 		exec:       c.exec,
 		codec:      c.codec,
 		schema:     c.schema,
+		indexes:    c.indexes,
 		conditions: []condition{{field, op, value}},
 	}
 }
@@ -53,6 +55,7 @@ func (q *Query[T]) Where(field, op string, value any) *Query[T] {
 		exec:       q.exec,
 		codec:      q.codec,
 		schema:     q.schema,
+		indexes:    q.indexes,
 		conditions: conds,
 	}
 }
@@ -72,7 +75,15 @@ func (q *Query[T]) toSQL() (string, []any, error) {
 }
 
 func (q *Query[T]) Execute(ctx context.Context) ([]*T, error) {
-	if err := q.schema.EnsureCollection(ctx, q.exec, q.name); err != nil {
+	col := &CollectionOf[T]{
+		name:    q.name,
+		table:   q.table,
+		exec:    q.exec,
+		codec:   q.codec,
+		schema:  q.schema,
+		indexes: q.indexes,
+	}
+	if err := col.ensure(ctx); err != nil {
 		return nil, err
 	}
 

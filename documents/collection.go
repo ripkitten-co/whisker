@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/internal/codecs"
+	"github.com/ripkitten-co/whisker/internal/indexes"
 	"github.com/ripkitten-co/whisker/internal/meta"
 	"github.com/ripkitten-co/whisker/internal/pg"
 	"github.com/ripkitten-co/whisker/schema"
@@ -17,25 +18,52 @@ import (
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
 type CollectionOf[T any] struct {
-	name   string
-	table  string
-	exec   pg.Executor
-	codec  codecs.Codec
-	schema *schema.Bootstrap
+	name    string
+	table   string
+	exec    pg.Executor
+	codec   codecs.Codec
+	schema  *schema.Bootstrap
+	indexes []meta.IndexMeta
 }
 
 func Collection[T any](b whisker.Backend, name string) *CollectionOf[T] {
+	m := meta.Analyze[T]()
 	return &CollectionOf[T]{
-		name:   name,
-		table:  "whisker_" + name,
-		exec:   b.DBExecutor(),
-		codec:  b.JSONCodec(),
-		schema: b.SchemaBootstrap(),
+		name:    name,
+		table:   "whisker_" + name,
+		exec:    b.DBExecutor(),
+		codec:   b.JSONCodec(),
+		schema:  b.SchemaBootstrap(),
+		indexes: m.Indexes,
 	}
 }
 
 func (c *CollectionOf[T]) ensure(ctx context.Context) error {
-	return c.schema.EnsureCollection(ctx, c.exec, c.name)
+	if err := c.schema.EnsureCollection(ctx, c.exec, c.name); err != nil {
+		return err
+	}
+	return c.ensureIndexes(ctx)
+}
+
+func (c *CollectionOf[T]) ensureIndexes(ctx context.Context) error {
+	if len(c.indexes) == 0 {
+		return nil
+	}
+	if tx, ok := c.exec.(pg.Transactional); ok && tx.InTransaction() {
+		return nil
+	}
+	ddls := indexes.IndexDDLs(c.name, c.indexes)
+	for i, ddl := range ddls {
+		name := indexes.IndexName(c.name, c.indexes[i])
+		if c.schema.IsIndexCreated(name) {
+			continue
+		}
+		if _, err := c.exec.Exec(ctx, ddl); err != nil {
+			return fmt.Errorf("collection %s: create index %s: %w", c.name, name, err)
+		}
+		c.schema.MarkIndexCreated(name)
+	}
+	return nil
 }
 
 func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
