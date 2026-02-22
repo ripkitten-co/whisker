@@ -102,3 +102,49 @@ func stringContains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestRewrite_Update(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "UPDATE users SET name = $1, email = $2 WHERE id = $3"
+	args := []any{"Bob", "bob@test.com", "u1"}
+
+	rewritten, newArgs, err := rewriteUpdate(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "jsonb_build_object") {
+		t.Errorf("expected jsonb_build_object: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "version = version + 1") {
+		t.Errorf("expected version increment: %s", rewritten)
+	}
+	if len(newArgs) < 1 {
+		t.Error("expected args")
+	}
+}
+
+func TestRewrite_Delete(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "DELETE FROM users WHERE id = $1"
+	args := []any{"u1"}
+
+	rewritten, newArgs, err := rewriteDelete(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if len(newArgs) != 1 || newArgs[0] != "u1" {
+		t.Errorf("args = %v, want [u1]", newArgs)
+	}
+}
