@@ -30,38 +30,41 @@ func NewWorker(store *whisker.Store, sub Subscriber) *Worker {
 	}
 }
 
-func (w *Worker) ProcessBatch(ctx context.Context) error {
+// ProcessBatch polls for events after the last checkpoint position and processes
+// them through the subscriber. Returns the number of events polled (before
+// filtering) so callers can decide whether to keep draining.
+func (w *Worker) ProcessBatch(ctx context.Context) (int, error) {
 	name := w.subscriber.Name()
 
 	pos, status, err := w.checkpoint.Load(ctx, name)
 	if err != nil {
-		return fmt.Errorf("worker %s: load checkpoint: %w", name, err)
+		return 0, fmt.Errorf("worker %s: load checkpoint: %w", name, err)
 	}
 
 	if status == "dead_letter" || status == "stopped" {
-		return nil
+		return 0, nil
 	}
 
 	evts, err := w.poller.Poll(ctx, pos)
 	if err != nil {
-		return fmt.Errorf("worker %s: poll: %w", name, err)
+		return 0, fmt.Errorf("worker %s: poll: %w", name, err)
 	}
 	if len(evts) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	filtered := w.filterEvents(evts)
 
 	if len(filtered) == 0 {
-		return w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
+		return len(evts), w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
 	}
 
 	ps := NewProcessingStoreFromBackend(w.store, name)
 	if err := w.subscriber.Process(ctx, filtered, ps); err != nil {
-		return fmt.Errorf("worker %s: process: %w", name, err)
+		return 0, fmt.Errorf("worker %s: process: %w", name, err)
 	}
 
-	return w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
+	return len(evts), w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
 }
 
 func (w *Worker) TryAcquireLock(ctx context.Context) (bool, error) {

@@ -42,7 +42,7 @@ func TestWorker_ProcessesBatch(t *testing.T) {
 	})
 
 	w := projections.NewWorker(store, proj)
-	if err := w.ProcessBatch(ctx); err != nil {
+	if _, err := w.ProcessBatch(ctx); err != nil {
 		t.Fatalf("process batch: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestWorker_SkipsDeadLetterStatus(t *testing.T) {
 	}
 
 	w := projections.NewWorker(store, proj)
-	if err := w.ProcessBatch(ctx); err != nil {
+	if _, err := w.ProcessBatch(ctx); err != nil {
 		t.Fatalf("process batch: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestWorker_FiltersByEventType(t *testing.T) {
 	})
 
 	w := projections.NewWorker(store, proj)
-	if err := w.ProcessBatch(ctx); err != nil {
+	if _, err := w.ProcessBatch(ctx); err != nil {
 		t.Fatalf("process batch: %v", err)
 	}
 
