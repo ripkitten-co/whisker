@@ -12,6 +12,7 @@ import (
 	"github.com/ripkitten-co/whisker/schema"
 )
 
+// Direction specifies sort order for query results.
 type Direction string
 
 const (
@@ -58,6 +59,8 @@ type condition struct {
 	value any
 }
 
+// Query builds and executes filtered, sorted, paginated queries against a
+// document collection. All methods return a new Query (immutable chaining).
 type Query[T any] struct {
 	name       string
 	table      string
@@ -95,6 +98,7 @@ func (q *Query[T]) clone() *Query[T] {
 	return c
 }
 
+// Query starts a fluent query builder for this collection.
 func (c *CollectionOf[T]) Query() *Query[T] {
 	return &Query[T]{
 		name:    c.name,
@@ -106,22 +110,27 @@ func (c *CollectionOf[T]) Query() *Query[T] {
 	}
 }
 
+// Where starts a query with an initial filter condition.
 func (c *CollectionOf[T]) Where(field, op string, value any) *Query[T] {
 	return c.Query().Where(field, op, value)
 }
 
+// Where adds a filter condition. Field names are resolved to JSONB paths
+// automatically. Supported operators: =, !=, >, <, >=, <=.
 func (q *Query[T]) Where(field, op string, value any) *Query[T] {
 	c := q.clone()
 	c.conditions = append(c.conditions, condition{field, op, value})
 	return c
 }
 
+// OrderBy adds a sort clause. Multiple calls add secondary sort keys.
 func (q *Query[T]) OrderBy(field string, dir Direction) *Query[T] {
 	c := q.clone()
 	c.orderBys = append(c.orderBys, orderByClause{field, dir})
 	return c
 }
 
+// Limit caps the number of results returned.
 func (q *Query[T]) Limit(n uint64) *Query[T] {
 	c := q.clone()
 	if n > 0 {
@@ -130,12 +139,15 @@ func (q *Query[T]) Limit(n uint64) *Query[T] {
 	return c
 }
 
+// Offset skips the first n results.
 func (q *Query[T]) Offset(n uint64) *Query[T] {
 	c := q.clone()
 	c.offset = &n
 	return c
 }
 
+// After enables cursor-based pagination. Requires at least one OrderBy clause.
+// Returns documents after the given value in the sort order.
 func (q *Query[T]) After(value any) *Query[T] {
 	c := q.clone()
 	c.afterVal = value
@@ -191,6 +203,7 @@ func (q *Query[T]) toExistsSQL() (string, []any, error) {
 	return fmt.Sprintf("SELECT EXISTS(%s)", innerSQL), args, nil
 }
 
+// Count returns the number of documents matching the query conditions.
 func (q *Query[T]) Count(ctx context.Context) (int64, error) {
 	if err := q.ensureTable(ctx); err != nil {
 		return 0, err
@@ -207,6 +220,7 @@ func (q *Query[T]) Count(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+// Exists returns true if at least one document matches the query conditions.
 func (q *Query[T]) Exists(ctx context.Context) (bool, error) {
 	if err := q.ensureTable(ctx); err != nil {
 		return false, err
@@ -270,6 +284,7 @@ func (q *Query[T]) toSQL() (string, []any, error) {
 	return builder.ToSql()
 }
 
+// Execute runs the query and returns matching documents.
 func (q *Query[T]) Execute(ctx context.Context) ([]*T, error) {
 	col := &CollectionOf[T]{
 		name:    q.name,

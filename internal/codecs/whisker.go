@@ -8,10 +8,14 @@ import (
 	"github.com/ripkitten-co/whisker/internal/meta"
 )
 
+// WhiskerCodec wraps another codec and excludes ID and Version fields during
+// marshaling. Only document data fields are serialized to JSONB.
 type WhiskerCodec struct {
 	inner Codec
 }
 
+// NewWhisker wraps inner so that ID and Version fields are excluded from
+// marshaled output.
 func NewWhisker(inner Codec) *WhiskerCodec {
 	return &WhiskerCodec{inner: inner}
 }

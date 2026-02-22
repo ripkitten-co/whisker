@@ -9,7 +9,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-func SetupPostgres(t *testing.T) string {
+func SetupPostgres(t testing.TB) string {
 	t.Helper()
 	ctx := context.Background()
 

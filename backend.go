@@ -12,6 +12,8 @@ type backend struct {
 	schema *schema.Bootstrap
 }
 
+// Backend provides access to the core Whisker subsystems: database executor,
+// JSON codec, and schema bootstrap. Both Store and Session implement it.
 type Backend interface {
 	DBExecutor() pg.Executor
 	JSONCodec() codecs.Codec

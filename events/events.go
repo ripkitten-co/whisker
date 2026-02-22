@@ -15,6 +15,7 @@ import (
 
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
+// Event represents a single event in a stream.
 type Event struct {
 	StreamID  string
 	Version   int
@@ -24,11 +25,14 @@ type Event struct {
 	CreatedAt time.Time
 }
 
+// Store provides append-only event stream operations backed by a single
+// whisker_events table.
 type Store struct {
 	exec   pg.Executor
 	schema *schema.Bootstrap
 }
 
+// New creates an event store using the given backend's executor and schema.
 func New(b whisker.Backend) *Store {
 	return &Store{
 		exec:   b.DBExecutor(),
@@ -36,6 +40,10 @@ func New(b whisker.Backend) *Store {
 	}
 }
 
+// Append writes events to a stream with optimistic concurrency control.
+// Pass expectedVersion 0 to create a new stream. Returns ErrStreamExists
+// if the stream already exists with version 0, or ErrConcurrencyConflict
+// if the expected version doesn't match.
 func (es *Store) Append(ctx context.Context, streamID string, expectedVersion int, evts []Event) error {
 	if len(evts) == 0 {
 		return fmt.Errorf("events: append %s: at least one event required", streamID)
@@ -88,6 +96,9 @@ func (es *Store) Append(ctx context.Context, streamID string, expectedVersion in
 	return nil
 }
 
+// ReadStream returns all events for a stream starting from fromVersion.
+// Pass 0 to read from the beginning. Returns an empty slice if the stream
+// doesn't exist.
 func (es *Store) ReadStream(ctx context.Context, streamID string, fromVersion int) ([]Event, error) {
 	if err := es.schema.EnsureEvents(ctx, es.exec); err != nil {
 		return nil, err

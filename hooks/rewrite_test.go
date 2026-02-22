@@ -1,0 +1,228 @@
+package hooks
+
+import (
+	"testing"
+)
+
+func TestRewrite_Insert(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+
+	info, _ := r.lookup("users")
+	sql := "INSERT INTO users (id,name,email,version) VALUES ($1,$2,$3,$4)"
+	args := []any{"u1", "Alice", "alice@test.com", 0}
+
+	rewritten, newArgs, err := rewriteInsert(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users in SQL: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "jsonb_build_object") {
+		t.Errorf("expected jsonb_build_object in SQL: %s", rewritten)
+	}
+	if len(newArgs) < 1 {
+		t.Errorf("expected at least 1 arg, got %d", len(newArgs))
+	}
+	if newArgs[0] != "u1" {
+		t.Errorf("first arg = %v, want u1", newArgs[0])
+	}
+}
+
+func TestRewrite_Insert_PreservesID(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+
+	info, _ := r.lookup("users")
+	sql := "INSERT INTO users (id,name,email) VALUES ($1,$2,$3)"
+	args := []any{"u1", "Alice", "alice@test.com"}
+
+	rewritten, newArgs, err := rewriteInsert(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if newArgs[0] != "u1" {
+		t.Errorf("id arg = %v, want u1", newArgs[0])
+	}
+	_ = rewritten
+}
+
+func TestRewrite_Select(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "SELECT id, name, email, version FROM users WHERE name = $1"
+	args := []any{"Alice"}
+
+	rewritten, newArgs, err := rewriteSelect(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users in SQL: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "data->>'name'") {
+		t.Errorf("expected JSONB path in WHERE: %s", rewritten)
+	}
+	if len(newArgs) != 1 || newArgs[0] != "Alice" {
+		t.Errorf("args = %v, want [Alice]", newArgs)
+	}
+}
+
+func TestRewrite_Select_ByID(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "SELECT id, name, email, version FROM users WHERE id = $1"
+	args := []any{"u1"}
+
+	rewritten, _, err := rewriteSelect(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	// id is a real column, not a JSONB path
+	if containsSubstring(rewritten, "data->>'id'") {
+		t.Errorf("id should not be JSONB path: %s", rewritten)
+	}
+}
+
+func containsSubstring(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && stringContains(s, sub))
+}
+
+func stringContains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRewrite_Update(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "UPDATE users SET name = $1, email = $2 WHERE id = $3"
+	args := []any{"Bob", "bob@test.com", "u1"}
+
+	rewritten, newArgs, err := rewriteUpdate(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "jsonb_build_object") {
+		t.Errorf("expected jsonb_build_object: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "version = version + 1") {
+		t.Errorf("expected version increment: %s", rewritten)
+	}
+	if len(newArgs) < 1 {
+		t.Error("expected args")
+	}
+}
+
+func TestRewrite_CreateTable(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "CREATE TABLE IF NOT EXISTS users (id text, name text, email text, version integer)"
+
+	rewritten, err := rewriteCreateTable(info, sql)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "JSONB") {
+		t.Errorf("expected JSONB column: %s", rewritten)
+	}
+}
+
+type testOrder struct {
+	ID     string
+	UserID string
+	Total  float64
+}
+
+func TestRewrite_Join(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	r.register("orders", analyzeModel[testOrder]("orders"))
+
+	sql := "SELECT u.id, u.name, o.id, o.total FROM users u JOIN orders o ON o.user_id = u.id WHERE u.name = $1"
+	args := []any{"Alice"}
+
+	rewritten, newArgs, err := rewriteJoin(r, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "whisker_orders") {
+		t.Errorf("expected whisker_orders: %s", rewritten)
+	}
+	if len(newArgs) != 1 {
+		t.Errorf("args = %v", newArgs)
+	}
+}
+
+func TestRewrite_Join_RewritesColumnRefs(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	r.register("orders", analyzeModel[testOrder]("orders"))
+
+	sql := "SELECT u.id, u.name, o.id, o.total FROM users u JOIN orders o ON o.user_id = u.id WHERE u.name = $1"
+	args := []any{"Alice"}
+
+	rewritten, _, err := rewriteJoin(r, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	// u.name should become a JSONB path
+	if !containsSubstring(rewritten, "u.data->>'name'") {
+		t.Errorf("expected u.data->>'name' in: %s", rewritten)
+	}
+	// o.total should become a JSONB path
+	if !containsSubstring(rewritten, "o.data->>'total'") {
+		t.Errorf("expected o.data->>'total' in: %s", rewritten)
+	}
+	// o.user_id should become a JSONB path (toCamelCase("UserID") = "userID")
+	if !containsSubstring(rewritten, "o.data->>'userID'") {
+		t.Errorf("expected o.data->>'userID' in: %s", rewritten)
+	}
+	// u.id should stay as u.id (real column)
+	if containsSubstring(rewritten, "u.data->>'id'") {
+		t.Errorf("u.id should not be JSONB path: %s", rewritten)
+	}
+}
+
+func TestRewrite_Delete(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "DELETE FROM users WHERE id = $1"
+	args := []any{"u1"}
+
+	rewritten, newArgs, err := rewriteDelete(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if len(newArgs) != 1 || newArgs[0] != "u1" {
+		t.Errorf("args = %v, want [u1]", newArgs)
+	}
+}
