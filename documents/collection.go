@@ -292,6 +292,73 @@ func (c *CollectionOf[T]) InsertMany(ctx context.Context, docs []*T) error {
 	return nil
 }
 
+// LoadMany retrieves multiple documents by ID in a single SELECT with WHERE IN.
+// Documents are returned in no guaranteed order. If some IDs are missing, the found
+// documents are returned alongside a BatchError listing the missing IDs.
+func (c *CollectionOf[T]) LoadMany(ctx context.Context, ids []string) ([]*T, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if err := c.checkBatchSize(len(ids)); err != nil {
+		return nil, err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return nil, err
+	}
+
+	query, args, err := psql.Select("id", "data", "version").
+		From(c.table).
+		Where(sq.Eq{"id": ids}).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("collection %s: load many: build sql: %w", c.name, err)
+	}
+
+	rows, err := c.exec.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("collection %s: load many: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	foundIDs := make(map[string]bool, len(ids))
+	docs := make([]*T, 0, len(ids))
+
+	for rows.Next() {
+		var id string
+		var data []byte
+		var version int
+		if err := rows.Scan(&id, &data, &version); err != nil {
+			return nil, fmt.Errorf("collection %s: load many: scan: %w", c.name, err)
+		}
+
+		var doc T
+		if err := c.codec.Unmarshal(data, &doc); err != nil {
+			return nil, fmt.Errorf("collection %s: load many %s: unmarshal: %w", c.name, id, err)
+		}
+
+		meta.SetID(&doc, id)
+		meta.SetVersion(&doc, version)
+		docs = append(docs, &doc)
+		foundIDs[id] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("collection %s: load many: %w", c.name, err)
+	}
+
+	if len(foundIDs) < len(ids) {
+		errs := map[string]error{}
+		for _, id := range ids {
+			if !foundIDs[id] {
+				errs[id] = whisker.ErrNotFound
+			}
+		}
+		return docs, &BatchError{Op: "load", Total: len(ids), Errors: errs}
+	}
+
+	return docs, nil
+}
+
 func (c *CollectionOf[T]) checkBatchSize(n int) error {
 	if c.maxBatchSize > 0 && n > c.maxBatchSize {
 		return fmt.Errorf("collection %s: %w: %d exceeds max %d", c.name, whisker.ErrBatchTooLarge, n, c.maxBatchSize)

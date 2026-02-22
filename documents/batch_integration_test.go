@@ -90,6 +90,98 @@ func TestInsertMany_EmptySlice(t *testing.T) {
 	}
 }
 
+func TestLoadMany_HappyPath(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "load_many_users")
+
+	docs := []*User{
+		{ID: "u1", Name: "Alice", Email: "alice@test.com"},
+		{ID: "u2", Name: "Bob", Email: "bob@test.com"},
+		{ID: "u3", Name: "Charlie", Email: "charlie@test.com"},
+	}
+	if err := users.InsertMany(ctx, docs); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := users.LoadMany(ctx, []string{"u1", "u3"})
+	if err != nil {
+		t.Fatalf("load many: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d docs, want 2", len(got))
+	}
+
+	ids := map[string]bool{}
+	for _, doc := range got {
+		ids[doc.ID] = true
+		if doc.Version != 1 {
+			t.Errorf("doc %s: version = %d, want 1", doc.ID, doc.Version)
+		}
+	}
+	if !ids["u1"] || !ids["u3"] {
+		t.Errorf("expected u1 and u3, got %v", ids)
+	}
+}
+
+func TestLoadMany_PartialMissing(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "load_many_partial_users")
+
+	if err := users.Insert(ctx, &User{ID: "u1", Name: "Alice"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := users.LoadMany(ctx, []string{"u1", "u99"})
+	if err == nil {
+		t.Fatal("expected error for missing ID")
+	}
+
+	var batchErr *documents.BatchError
+	if !errors.As(err, &batchErr) {
+		t.Fatalf("expected BatchError, got %T: %v", err, err)
+	}
+	if batchErr.Op != "load" {
+		t.Errorf("op = %q, want %q", batchErr.Op, "load")
+	}
+	if len(batchErr.Errors) != 1 {
+		t.Fatalf("errors count = %d, want 1", len(batchErr.Errors))
+	}
+	if !errors.Is(batchErr.Errors["u99"], whisker.ErrNotFound) {
+		t.Errorf("u99 error = %v, want ErrNotFound", batchErr.Errors["u99"])
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d docs, want 1", len(got))
+	}
+	if got[0].ID != "u1" {
+		t.Errorf("got ID = %q, want u1", got[0].ID)
+	}
+}
+
+func TestLoadMany_EmptySlice(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "load_many_empty_users")
+
+	got, err := users.LoadMany(ctx, nil)
+	if err != nil {
+		t.Errorf("nil slice: %v", err)
+	}
+	if got != nil {
+		t.Errorf("nil slice: got %v, want nil", got)
+	}
+
+	got, err = users.LoadMany(ctx, []string{})
+	if err != nil {
+		t.Errorf("empty slice: %v", err)
+	}
+	if got != nil {
+		t.Errorf("empty slice: got %v, want nil", got)
+	}
+}
+
 func TestInsertMany_BatchTooLarge(t *testing.T) {
 	connStr := setupConnStr(t)
 	store, err := whisker.New(context.Background(), connStr, whisker.WithMaxBatchSize(2))
