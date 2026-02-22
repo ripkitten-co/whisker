@@ -255,6 +255,117 @@ func rewriteCreateTable(info *modelInfo, _ string) (string, error) {
 )`, info.table), nil
 }
 
+// tableAlias pairs an alias with its resolved modelInfo.
+type tableAlias struct {
+	alias string
+	info  *modelInfo
+}
+
+// rewriteJoin transforms a SELECT with JOIN clauses into Whisker JSONB queries.
+// All registered table references are rewritten to their whisker_ equivalents,
+// and qualified column references are translated to JSONB paths.
+func rewriteJoin(r *registry, sql string, args []any) (string, []any, error) {
+	aliases, err := extractTableAliases(r, sql)
+	if err != nil {
+		return "", nil, err
+	}
+
+	rewritten := sql
+	for _, ta := range aliases {
+		rewritten = replaceWord(rewritten, ta.info.name, ta.info.table)
+	}
+
+	rewritten = rewriteQualifiedRefs(rewritten, aliases)
+
+	return rewritten, args, nil
+}
+
+// extractTableAliases finds "table alias" pairs from FROM and JOIN clauses.
+func extractTableAliases(r *registry, sql string) ([]tableAlias, error) {
+	upper := strings.ToUpper(sql)
+
+	var aliases []tableAlias
+
+	// extract FROM table
+	fromIdx := strings.Index(upper, " FROM ")
+	if fromIdx == -1 {
+		return nil, fmt.Errorf("hooks: no FROM clause in join query")
+	}
+	fromRest := sql[fromIdx+6:]
+	table, alias := extractTableAndAlias(fromRest)
+	if info, ok := r.lookupByTable(table); ok {
+		aliases = append(aliases, tableAlias{alias: alias, info: info})
+	}
+
+	// extract JOIN tables
+	searchFrom := fromIdx
+	for {
+		joinIdx := indexOfJoin(upper, searchFrom)
+		if joinIdx == -1 {
+			break
+		}
+		// skip past "JOIN "
+		afterJoin := sql[joinIdx:]
+		spaceIdx := strings.IndexByte(afterJoin, ' ')
+		if spaceIdx == -1 {
+			break
+		}
+		joinRest := afterJoin[spaceIdx+1:]
+		table, alias := extractTableAndAlias(joinRest)
+		if info, ok := r.lookupByTable(table); ok {
+			aliases = append(aliases, tableAlias{alias: alias, info: info})
+		}
+		searchFrom = joinIdx + spaceIdx + 1
+	}
+
+	return aliases, nil
+}
+
+// indexOfJoin finds the next JOIN keyword position after startIdx.
+func indexOfJoin(upper string, startIdx int) int {
+	rest := upper[startIdx:]
+	idx := strings.Index(rest, " JOIN ")
+	if idx == -1 {
+		return -1
+	}
+	return startIdx + idx + 1 // position of 'J' in JOIN
+}
+
+// extractTableAndAlias parses "tablename alias" or "tablename" from the start of s.
+func extractTableAndAlias(s string) (table, alias string) {
+	s = strings.TrimSpace(s)
+	table = extractFirstWord(s)
+	rest := strings.TrimSpace(s[len(table):])
+
+	// check for explicit alias (next word before ON/WHERE/JOIN/comma)
+	if rest == "" {
+		return table, table
+	}
+	nextWord := extractFirstWord(rest)
+	upperNext := strings.ToUpper(nextWord)
+	if upperNext == "ON" || upperNext == "WHERE" || upperNext == "JOIN" ||
+		upperNext == "LEFT" || upperNext == "RIGHT" || upperNext == "INNER" ||
+		upperNext == "OUTER" || upperNext == "CROSS" || upperNext == "ORDER" ||
+		upperNext == "GROUP" || upperNext == "LIMIT" {
+		return table, table
+	}
+	return table, nextWord
+}
+
+// rewriteQualifiedRefs rewrites alias.column references to JSONB paths.
+// Real columns (id, version) stay as-is; data columns become alias.data->>'jsonKey'.
+func rewriteQualifiedRefs(sql string, aliases []tableAlias) string {
+	for _, ta := range aliases {
+		for _, dc := range ta.info.dataCols {
+			// alias.column_name -> alias.data->>'jsonKey'
+			old := ta.alias + "." + dc.name
+			replacement := ta.alias + ".data->>'" + dc.jsonKey + "'"
+			sql = replaceWord(sql, old, replacement)
+		}
+	}
+	return sql
+}
+
 func extractInsertColumns(sql string) []string {
 	upper := strings.ToUpper(sql)
 	start := strings.IndexByte(upper, '(')

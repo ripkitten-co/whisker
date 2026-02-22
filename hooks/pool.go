@@ -71,21 +71,28 @@ func (p *Pool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, er
 		return p.store.DBExecutor().Query(ctx, sql, args...)
 	}
 
-	if op != opSelect && op != opSelectJoin {
+	switch op {
+	case opSelectJoin:
+		rewritten, newArgs, err := rewriteJoin(p.reg, sql, args)
+		if err != nil {
+			return nil, err
+		}
+		return p.store.DBExecutor().Query(ctx, rewritten, newArgs...)
+
+	case opSelect:
+		rewritten, newArgs, err := rewriteSelect(info, sql, args)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := p.store.DBExecutor().Query(ctx, rewritten, newArgs...)
+		if err != nil {
+			return nil, err
+		}
+		return &translatedRows{inner: rows, info: info}, nil
+
+	default:
 		return p.store.DBExecutor().Query(ctx, sql, args...)
 	}
-
-	rewritten, newArgs, err := rewriteSelect(info, sql, args)
-	if err != nil {
-		return nil, err
-	}
-
-	rows, err := p.store.DBExecutor().Query(ctx, rewritten, newArgs...)
-	if err != nil {
-		return nil, err
-	}
-
-	return &translatedRows{inner: rows, info: info}, nil
 }
 
 // QueryRow wraps Query for single-row results.

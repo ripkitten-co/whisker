@@ -117,12 +117,20 @@ func (c *gormConnPool) rewriteQuery(query string, args []any) (string, []any) {
 		return query, args
 	}
 
+	if op == opSelectJoin {
+		rewritten, newArgs, err := rewriteJoin(c.reg, query, args)
+		if err != nil {
+			return query, args
+		}
+		return rewritten, newArgs
+	}
+
 	info, found := c.reg.lookupByTable(table)
 	if !found {
 		return query, args
 	}
 
-	if op != opSelect && op != opSelectJoin {
+	if op != opSelect {
 		return query, args
 	}
 

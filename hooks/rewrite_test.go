@@ -148,6 +148,65 @@ func TestRewrite_CreateTable(t *testing.T) {
 	}
 }
 
+type testOrder struct {
+	ID     string
+	UserID string
+	Total  float64
+}
+
+func TestRewrite_Join(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	r.register("orders", analyzeModel[testOrder]("orders"))
+
+	sql := "SELECT u.id, u.name, o.id, o.total FROM users u JOIN orders o ON o.user_id = u.id WHERE u.name = $1"
+	args := []any{"Alice"}
+
+	rewritten, newArgs, err := rewriteJoin(r, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "whisker_orders") {
+		t.Errorf("expected whisker_orders: %s", rewritten)
+	}
+	if len(newArgs) != 1 {
+		t.Errorf("args = %v", newArgs)
+	}
+}
+
+func TestRewrite_Join_RewritesColumnRefs(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	r.register("orders", analyzeModel[testOrder]("orders"))
+
+	sql := "SELECT u.id, u.name, o.id, o.total FROM users u JOIN orders o ON o.user_id = u.id WHERE u.name = $1"
+	args := []any{"Alice"}
+
+	rewritten, _, err := rewriteJoin(r, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	// u.name should become a JSONB path
+	if !containsSubstring(rewritten, "u.data->>'name'") {
+		t.Errorf("expected u.data->>'name' in: %s", rewritten)
+	}
+	// o.total should become a JSONB path
+	if !containsSubstring(rewritten, "o.data->>'total'") {
+		t.Errorf("expected o.data->>'total' in: %s", rewritten)
+	}
+	// o.user_id should become a JSONB path (toCamelCase("UserID") = "userID")
+	if !containsSubstring(rewritten, "o.data->>'userID'") {
+		t.Errorf("expected o.data->>'userID' in: %s", rewritten)
+	}
+	// u.id should stay as u.id (real column)
+	if containsSubstring(rewritten, "u.data->>'id'") {
+		t.Errorf("u.id should not be JSONB path: %s", rewritten)
+	}
+}
+
 func TestRewrite_Delete(t *testing.T) {
 	r := newRegistry()
 	r.register("users", analyzeModel[testUser]("users"))
