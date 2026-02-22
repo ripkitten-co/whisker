@@ -38,7 +38,7 @@ type jsonTagDoc struct {
 type unexportedDoc struct {
 	ID      string
 	Name    string
-	secret  string
+	secret  string //nolint:unused // intentionally unexported for test coverage
 	Version int
 }
 
