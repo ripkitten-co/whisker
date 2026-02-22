@@ -75,7 +75,9 @@ func (cs *CheckpointStore) SetStatus(ctx context.Context, name string, status st
 	}
 
 	_, err := cs.exec.Exec(ctx,
-		`UPDATE whisker_projection_checkpoints SET status = $2, updated_at = now() WHERE projection_name = $1`,
+		`INSERT INTO whisker_projection_checkpoints (projection_name, last_position, status, updated_at)
+		 VALUES ($1, 0, $2, now())
+		 ON CONFLICT (projection_name) DO UPDATE SET status = $2, updated_at = now()`,
 		name, status,
 	)
 	if err != nil {

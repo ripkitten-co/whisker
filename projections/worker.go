@@ -11,12 +11,14 @@ import (
 )
 
 type Worker struct {
-	store      *whisker.Store
-	subscriber Subscriber
-	checkpoint *CheckpointStore
-	poller     *Poller
-	exec       pg.Executor
-	batchSize  int
+	store               *whisker.Store
+	subscriber          Subscriber
+	checkpoint          *CheckpointStore
+	poller              *Poller
+	exec                pg.Executor
+	batchSize           int
+	maxRetries          int
+	consecutiveFailures int
 }
 
 func NewWorker(store *whisker.Store, sub Subscriber) *Worker {
@@ -27,7 +29,12 @@ func NewWorker(store *whisker.Store, sub Subscriber) *Worker {
 		poller:     NewPoller(store, 100),
 		exec:       store.DBExecutor(),
 		batchSize:  100,
+		maxRetries: 5,
 	}
+}
+
+func (w *Worker) SetMaxRetries(n int) {
+	w.maxRetries = n
 }
 
 // ProcessBatch polls for events after the last checkpoint position and processes
@@ -61,9 +68,14 @@ func (w *Worker) ProcessBatch(ctx context.Context) (int, error) {
 
 	ps := NewProcessingStoreFromBackend(w.store, name)
 	if err := w.subscriber.Process(ctx, filtered, ps); err != nil {
+		w.consecutiveFailures++
+		if w.consecutiveFailures >= w.maxRetries {
+			_ = w.checkpoint.SetStatus(ctx, name, "dead_letter")
+		}
 		return 0, fmt.Errorf("worker %s: process: %w", name, err)
 	}
 
+	w.consecutiveFailures = 0
 	return len(evts), w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
 }
 

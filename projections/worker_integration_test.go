@@ -4,6 +4,8 @@ package projections_test
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ripkitten-co/whisker/events"
@@ -169,5 +171,46 @@ func TestWorker_AdvisoryLock(t *testing.T) {
 
 	if err := w.ReleaseLock(ctx); err != nil {
 		t.Fatalf("release lock: %v", err)
+	}
+}
+
+func TestWorker_DeadLetterAfterMaxRetries(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	es := events.New(store)
+
+	err := es.Append(ctx, "order-dl", 0, []events.Event{
+		{Type: "AlwaysFails", Data: []byte(`{"id":"order-dl"}`)},
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	var attempts atomic.Int32
+	proj := projections.New[OrderSummary](store, "dead_letter_retries")
+	proj.On("AlwaysFails", func(ctx context.Context, evt events.Event, state *OrderSummary) (*OrderSummary, error) {
+		attempts.Add(1)
+		return nil, fmt.Errorf("always fails")
+	})
+
+	w := projections.NewWorker(store, proj)
+	w.SetMaxRetries(3)
+
+	for i := 0; i < 5; i++ {
+		w.ProcessBatch(ctx)
+	}
+
+	cs := projections.NewCheckpointStore(store)
+	_, status, err := cs.Load(ctx, "dead_letter_retries")
+	if err != nil {
+		t.Fatalf("load checkpoint: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Errorf("status: got %q, want %q", status, "dead_letter")
+	}
+
+	got := int(attempts.Load())
+	if got != 3 {
+		t.Errorf("attempts: got %d, want 3", got)
 	}
 }
