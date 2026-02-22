@@ -11,12 +11,16 @@ import (
 	"github.com/ripkitten-co/whisker/schema"
 )
 
+// Session wraps a PostgreSQL transaction spanning document operations and event
+// appends. Call Commit to persist all changes atomically, or Close/Rollback to
+// discard them.
 type Session struct {
 	tx     pgx.Tx
 	be     backend
 	closed bool
 }
 
+// Session begins a new transaction and returns a Session.
 func (s *Store) Session(ctx context.Context) (*Session, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -37,6 +41,7 @@ func (s *Session) DBExecutor() pg.Executor            { return s.be.exec }
 func (s *Session) JSONCodec() codecs.Codec            { return s.be.codec }
 func (s *Session) SchemaBootstrap() *schema.Bootstrap { return s.be.schema }
 
+// Commit persists all operations in this session atomically.
 func (s *Session) Commit(ctx context.Context) error {
 	if s.closed {
 		return fmt.Errorf("whisker: session already closed")
@@ -48,6 +53,7 @@ func (s *Session) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rollback discards all operations. Safe to call multiple times.
 func (s *Session) Rollback(ctx context.Context) error {
 	if s.closed {
 		return nil
@@ -59,6 +65,7 @@ func (s *Session) Rollback(ctx context.Context) error {
 	return nil
 }
 
+// Close rolls back if not already committed. Safe to defer.
 func (s *Session) Close(ctx context.Context) error {
 	if s.closed {
 		return nil
