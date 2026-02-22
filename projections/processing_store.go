@@ -17,6 +17,8 @@ type pgProcessingStore struct {
 	name   string
 }
 
+// NewProcessingStoreFromBackend creates a ProcessingStore backed by the
+// whisker_{name} collection table.
 func NewProcessingStoreFromBackend(b whisker.Backend, name string) ProcessingStore {
 	return &pgProcessingStore{
 		exec:   b.DBExecutor(),

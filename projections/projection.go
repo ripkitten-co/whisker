@@ -8,14 +8,20 @@ import (
 	"github.com/ripkitten-co/whisker/events"
 )
 
+// ApplyFunc is the callback signature for read-model projections. It receives
+// the current state (nil for the first event on a stream) and returns the new
+// state. Returning nil deletes the read model for that stream.
 type ApplyFunc[T any] func(ctx context.Context, evt events.Event, state *T) (*T, error)
 
+// Projection builds a read model from event streams. Register event handlers
+// with On, then add the projection to a Daemon for continuous processing.
 type Projection[T any] struct {
 	name     string
 	store    *whisker.Store
 	handlers map[string]ApplyFunc[T]
 }
 
+// New creates a projection that writes to the whisker_{name} collection.
 func New[T any](store *whisker.Store, name string) *Projection[T] {
 	return &Projection[T]{
 		name:     name,
@@ -24,15 +30,19 @@ func New[T any](store *whisker.Store, name string) *Projection[T] {
 	}
 }
 
+// On registers a handler for the given event type. Returns the projection
+// for method chaining.
 func (p *Projection[T]) On(eventType string, fn ApplyFunc[T]) *Projection[T] {
 	p.handlers[eventType] = fn
 	return p
 }
 
+// Name returns the projection identifier, used for checkpointing and table naming.
 func (p *Projection[T]) Name() string {
 	return p.name
 }
 
+// EventTypes returns the event types this projection handles.
 func (p *Projection[T]) EventTypes() []string {
 	types := make([]string, 0, len(p.handlers))
 	for t := range p.handlers {
@@ -41,6 +51,9 @@ func (p *Projection[T]) EventTypes() []string {
 	return types
 }
 
+// Process applies matching events to the read model. For each event it loads
+// current state, calls the registered handler, then upserts or deletes the
+// result.
 func (p *Projection[T]) Process(ctx context.Context, evts []events.Event, ps ProcessingStore) error {
 	codec := p.store.JSONCodec()
 	for _, evt := range evts {

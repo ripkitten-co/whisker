@@ -11,11 +11,14 @@ import (
 	"github.com/ripkitten-co/whisker/schema"
 )
 
+// CheckpointStore tracks the last processed global_position for each
+// projection, enabling resume-from-where-you-left-off semantics.
 type CheckpointStore struct {
 	exec   pg.Executor
 	schema *schema.Bootstrap
 }
 
+// NewCheckpointStore creates a checkpoint store backed by the given whisker backend.
 func NewCheckpointStore(b whisker.Backend) *CheckpointStore {
 	return &CheckpointStore{
 		exec:   b.DBExecutor(),

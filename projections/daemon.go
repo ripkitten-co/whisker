@@ -10,6 +10,7 @@ import (
 	"github.com/ripkitten-co/whisker"
 )
 
+// DaemonOption configures the projection daemon.
 type DaemonOption func(*daemonConfig)
 
 type daemonConfig struct {
@@ -17,20 +18,28 @@ type daemonConfig struct {
 	batchSize       int
 }
 
+// WithPollingInterval sets how often each worker polls for new events.
+// Defaults to 5 seconds.
 func WithPollingInterval(d time.Duration) DaemonOption {
 	return func(c *daemonConfig) { c.pollingInterval = d }
 }
 
+// WithBatchSize sets the maximum number of events fetched per poll cycle.
+// Defaults to 100.
 func WithBatchSize(n int) DaemonOption {
 	return func(c *daemonConfig) { c.batchSize = n }
 }
 
+// Daemon runs registered subscribers in independent goroutines, each with its
+// own checkpoint and advisory lock. It is the main entry point for running
+// projections and side-effect handlers.
 type Daemon struct {
 	store       *whisker.Store
 	config      daemonConfig
 	subscribers []Subscriber
 }
 
+// NewDaemon creates a daemon bound to the given store.
 func NewDaemon(store *whisker.Store, opts ...DaemonOption) *Daemon {
 	cfg := daemonConfig{
 		pollingInterval: 5 * time.Second,
@@ -42,10 +51,13 @@ func NewDaemon(store *whisker.Store, opts ...DaemonOption) *Daemon {
 	return &Daemon{store: store, config: cfg}
 }
 
+// Add registers a subscriber (projection or handler) to be run by the daemon.
 func (d *Daemon) Add(sub Subscriber) {
 	d.subscribers = append(d.subscribers, sub)
 }
 
+// Run starts all subscribers in separate goroutines and blocks until the
+// context is cancelled.
 func (d *Daemon) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 
@@ -107,6 +119,8 @@ func drainBatches(ctx context.Context, w *Worker) {
 	}
 }
 
+// Rebuild drops the read model table for the named projection, resets its
+// checkpoint to zero, and replays all events from the beginning.
 func (d *Daemon) Rebuild(ctx context.Context, name string) error {
 	var sub Subscriber
 	for _, s := range d.subscribers {

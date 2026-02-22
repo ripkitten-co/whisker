@@ -10,6 +10,8 @@ import (
 	"github.com/ripkitten-co/whisker/internal/pg"
 )
 
+// Worker drives a single subscriber: poll events, filter, process, checkpoint.
+// Each worker runs in its own goroutine, coordinated by the Daemon.
 type Worker struct {
 	store               *whisker.Store
 	subscriber          Subscriber
@@ -21,6 +23,8 @@ type Worker struct {
 	consecutiveFailures int
 }
 
+// NewWorker creates a worker for the given subscriber with sensible defaults
+// (batch size 100, max retries 5).
 func NewWorker(store *whisker.Store, sub Subscriber) *Worker {
 	return &Worker{
 		store:      store,
@@ -33,6 +37,8 @@ func NewWorker(store *whisker.Store, sub Subscriber) *Worker {
 	}
 }
 
+// SetMaxRetries configures the number of consecutive failures before the
+// worker transitions the projection to dead_letter status.
 func (w *Worker) SetMaxRetries(n int) {
 	w.maxRetries = n
 }
@@ -79,6 +85,8 @@ func (w *Worker) ProcessBatch(ctx context.Context) (int, error) {
 	return len(evts), w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
 }
 
+// TryAcquireLock attempts a PostgreSQL advisory lock keyed by the subscriber
+// name. Returns false if another instance holds the lock.
 func (w *Worker) TryAcquireLock(ctx context.Context) (bool, error) {
 	lockID := lockHash(w.subscriber.Name())
 	var acquired bool
@@ -89,6 +97,7 @@ func (w *Worker) TryAcquireLock(ctx context.Context) (bool, error) {
 	return acquired, nil
 }
 
+// ReleaseLock releases the advisory lock acquired by TryAcquireLock.
 func (w *Worker) ReleaseLock(ctx context.Context) error {
 	lockID := lockHash(w.subscriber.Name())
 	var released bool
