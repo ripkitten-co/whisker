@@ -46,6 +46,11 @@ func analyzeModel[T any](name string) *modelInfo {
 	var dataCols []columnInfo
 	for _, f := range m.Fields {
 		sf := t.Field(f.Index)
+		// Skip embedded structs -- ORM base models (bun.BaseModel, etc.)
+		// are not real data columns.
+		if sf.Anonymous {
+			continue
+		}
 		dataCols = append(dataCols, columnInfo{
 			name:    toLowerSnake(sf.Name),
 			jsonKey: f.JSONKey,

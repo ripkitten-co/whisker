@@ -5,10 +5,12 @@ import (
 	"database/sql"
 
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
 // bunAdapter wraps a *sql.DB with SQL interception for registered Whisker models.
-// It satisfies the minimal interface Bun needs: ExecContext and QueryContext.
+// It satisfies bun.IConn so it can be used with Bun's .Conn() query method.
 type bunAdapter struct {
 	db   *sql.DB
 	reg  *registry
@@ -16,8 +18,8 @@ type bunAdapter struct {
 }
 
 // BunAdapter returns an adapter that intercepts SQL for registered Whisker models.
-// The returned value provides ExecContext and QueryContext compatible with
-// database/sql types, which Bun's SQL driver expects.
+// The returned value provides ExecContext, QueryContext, and QueryRowContext
+// compatible with database/sql types, which Bun's SQL driver expects.
 func BunAdapter(p *Pool) *bunAdapter {
 	sqlDB := stdlib.OpenDBFromPool(p.store.PgxPool())
 	return &bunAdapter{
@@ -25,6 +27,14 @@ func BunAdapter(p *Pool) *bunAdapter {
 		reg:  p.reg,
 		pool: p,
 	}
+}
+
+// OpenBun creates a *bun.DB backed by a Whisker pool. All queries executed
+// through the returned DB are intercepted and rewritten for registered models.
+func OpenBun(p *Pool) (*bun.DB, *bunAdapter) {
+	adapter := BunAdapter(p)
+	bunDB := bun.NewDB(adapter.db, pgdialect.New())
+	return bunDB, adapter
 }
 
 func (a *bunAdapter) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -35,6 +45,11 @@ func (a *bunAdapter) ExecContext(ctx context.Context, query string, args ...any)
 func (a *bunAdapter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	rewritten, newArgs := a.rewriteQuery(query, args)
 	return a.db.QueryContext(ctx, rewritten, newArgs...)
+}
+
+func (a *bunAdapter) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	rewritten, newArgs := a.rewriteQuery(query, args)
+	return a.db.QueryRowContext(ctx, rewritten, newArgs...)
 }
 
 func (a *bunAdapter) rewriteExec(ctx context.Context, query string, args []any) (string, []any) {

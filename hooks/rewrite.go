@@ -8,10 +8,20 @@ import (
 // rewriteInsert transforms an ORM INSERT targeting a plain table into a
 // Whisker JSONB insert. Column values that aren't id/version are packed
 // into a jsonb_build_object call.
+//
+// Handles two SQL styles:
+//   - Parameterized: INSERT INTO t (a, b) VALUES ($1, $2) with separate args
+//   - Inline: INSERT INTO t ("a", "b") VALUES ('x', 'y') with no args (Bun style)
 func rewriteInsert(info *modelInfo, sql string, args []any) (string, []any, error) {
 	cols := extractInsertColumns(sql)
 	if len(cols) == 0 {
 		return "", nil, fmt.Errorf("hooks: cannot parse INSERT columns from: %s", sql)
+	}
+
+	// When args are empty, the ORM inlined values into the SQL string (Bun does this).
+	// Extract them so the rest of the rewriter works uniformly.
+	if len(args) == 0 {
+		args = extractInlineValues(sql)
 	}
 
 	colArgs := make(map[string]any, len(cols))
@@ -364,6 +374,68 @@ func rewriteQualifiedRefs(sql string, aliases []tableAlias) string {
 		}
 	}
 	return sql
+}
+
+// extractInlineValues parses the VALUES (...) clause and returns each
+// value as a string. Handles single-quoted strings, numeric literals, and NULL.
+// Example: VALUES ('hello', 42, NULL) -> ["hello", "42", "NULL"]
+func extractInlineValues(sql string) []any {
+	upper := strings.ToUpper(sql)
+	valIdx := strings.Index(upper, "VALUES")
+	if valIdx == -1 {
+		return nil
+	}
+	rest := sql[valIdx+6:]
+	openParen := strings.IndexByte(rest, '(')
+	if openParen == -1 {
+		return nil
+	}
+	rest = rest[openParen+1:]
+
+	// find the matching close paren, respecting quoted strings
+	var vals []any
+	i := 0
+	for i < len(rest) {
+		for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
+			i++
+		}
+		if i >= len(rest) || rest[i] == ')' {
+			break
+		}
+
+		if rest[i] == '\'' {
+			// quoted string value
+			i++ // skip opening quote
+			var sb strings.Builder
+			for i < len(rest) {
+				if rest[i] == '\'' {
+					if i+1 < len(rest) && rest[i+1] == '\'' {
+						sb.WriteByte('\'')
+						i += 2
+						continue
+					}
+					i++ // skip closing quote
+					break
+				}
+				sb.WriteByte(rest[i])
+				i++
+			}
+			vals = append(vals, sb.String())
+		} else {
+			// unquoted token (number, NULL, etc.)
+			start := i
+			for i < len(rest) && rest[i] != ',' && rest[i] != ')' && rest[i] != ' ' {
+				i++
+			}
+			vals = append(vals, strings.TrimSpace(rest[start:i]))
+		}
+
+		// skip comma separator
+		for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == ',') {
+			i++
+		}
+	}
+	return vals
 }
 
 func extractInsertColumns(sql string) []string {
