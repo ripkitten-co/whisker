@@ -17,6 +17,9 @@ import (
 
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
+// CollectionOf provides typed CRUD operations for a named document collection.
+// Documents are stored as JSONB in a whisker_{name} table with automatic schema
+// creation and optional index management.
 type CollectionOf[T any] struct {
 	name    string
 	table   string
@@ -26,6 +29,7 @@ type CollectionOf[T any] struct {
 	indexes []meta.IndexMeta
 }
 
+// Collection creates a new typed collection backed by the given store.
 func Collection[T any](b whisker.Backend, name string) *CollectionOf[T] {
 	m := meta.Analyze[T]()
 	return &CollectionOf[T]{
@@ -66,6 +70,8 @@ func (c *CollectionOf[T]) ensureIndexes(ctx context.Context) error {
 	return nil
 }
 
+// Insert stores a new document. The document must have a non-empty ID field.
+// On success, the document's Version is set to 1.
 func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 	if err := c.ensure(ctx); err != nil {
 		return err
@@ -98,6 +104,9 @@ func (c *CollectionOf[T]) Insert(ctx context.Context, doc *T) error {
 	return nil
 }
 
+// Update replaces an existing document's data. If the document has a Version
+// field, optimistic concurrency is enforced — a concurrent modification returns
+// ErrConcurrencyConflict. On success, Version is incremented.
 func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
 	if err := c.ensure(ctx); err != nil {
 		return err
@@ -146,6 +155,7 @@ func (c *CollectionOf[T]) Update(ctx context.Context, doc *T) error {
 	return nil
 }
 
+// Delete removes a document by ID. Returns ErrNotFound if absent.
 func (c *CollectionOf[T]) Delete(ctx context.Context, id string) error {
 	if err := c.ensure(ctx); err != nil {
 		return err
@@ -167,10 +177,12 @@ func (c *CollectionOf[T]) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// Count returns the total number of documents in the collection.
 func (c *CollectionOf[T]) Count(ctx context.Context) (int64, error) {
 	return c.Query().Count(ctx)
 }
 
+// Exists checks whether a document with the given ID exists.
 func (c *CollectionOf[T]) Exists(ctx context.Context, id string) (bool, error) {
 	if err := c.ensure(ctx); err != nil {
 		return false, err
@@ -189,6 +201,7 @@ func (c *CollectionOf[T]) Exists(ctx context.Context, id string) (bool, error) {
 	return exists, nil
 }
 
+// Load retrieves a single document by ID. Returns ErrNotFound if absent.
 func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 	if err := c.ensure(ctx); err != nil {
 		return nil, err
