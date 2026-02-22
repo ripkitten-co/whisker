@@ -122,4 +122,3 @@ func TestBatchError_IsMatchesInnerErrors(t *testing.T) {
 		t.Error("errors.Is should not match ErrNotFound when not present")
 	}
 }
-

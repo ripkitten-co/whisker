@@ -23,4 +23,3 @@ func (e *BatchError) Unwrap() []error {
 	}
 	return errs
 }
-
