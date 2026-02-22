@@ -30,9 +30,10 @@ func (s *Store) Session(ctx context.Context) (*Session, error) {
 	return &Session{
 		tx: tx,
 		be: backend{
-			exec:   txExecutor{tx},
-			codec:  s.be.codec,
-			schema: schema.New(),
+			exec:         txExecutor{tx},
+			codec:        s.be.codec,
+			schema:       schema.New(),
+			maxBatchSize: s.be.maxBatchSize,
 		},
 	}, nil
 }
@@ -40,6 +41,7 @@ func (s *Store) Session(ctx context.Context) (*Session, error) {
 func (s *Session) DBExecutor() pg.Executor            { return s.be.exec }
 func (s *Session) JSONCodec() codecs.Codec            { return s.be.codec }
 func (s *Session) SchemaBootstrap() *schema.Bootstrap { return s.be.schema }
+func (s *Session) MaxBatchSize() int                  { return s.be.maxBatchSize }
 
 // Commit persists all operations in this session atomically.
 func (s *Session) Commit(ctx context.Context) error {

@@ -32,9 +32,10 @@ func New(ctx context.Context, connString string, opts ...Option) (*Store, error)
 	s := &Store{
 		pool: pool,
 		be: backend{
-			exec:   pool,
-			codec:  codecs.NewWhisker(cfg.codec),
-			schema: schema.New(),
+			exec:         pool,
+			codec:        codecs.NewWhisker(cfg.codec),
+			schema:       schema.New(),
+			maxBatchSize: cfg.maxBatchSize,
 		},
 	}
 	return s, nil
@@ -53,6 +54,9 @@ func (s *Store) JSONCodec() codecs.Codec { return s.be.codec }
 
 // SchemaBootstrap returns the schema bootstrap manager.
 func (s *Store) SchemaBootstrap() *schema.Bootstrap { return s.be.schema }
+
+// MaxBatchSize returns the maximum number of documents per batch operation.
+func (s *Store) MaxBatchSize() int { return s.be.maxBatchSize }
 
 // PgxPool returns the underlying pgxpool.Pool for use with stdlib adapters.
 func (s *Store) PgxPool() *pgxpool.Pool { return s.pool.PgxPool() }
