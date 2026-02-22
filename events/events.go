@@ -95,7 +95,7 @@ func (es *Store) Append(ctx context.Context, streamID string, expectedVersion in
 	}
 
 	// best-effort notification for projection pollers
-	es.exec.Exec(ctx, "SELECT pg_notify('whisker_events', '')")
+	_, _ = es.exec.Exec(ctx, "SELECT pg_notify('whisker_events', '')")
 
 	return nil
 }
