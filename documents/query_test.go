@@ -289,6 +289,96 @@ func TestQuery_AfterSQL(t *testing.T) {
 	}
 }
 
+func TestQuery_CountSQL(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(q *Query[testDoc]) *Query[testDoc]
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:    "count all",
+			setup:   func(q *Query[testDoc]) *Query[testDoc] { return q },
+			wantSQL: "SELECT COUNT(*) FROM whisker_users",
+		},
+		{
+			name:     "count with where",
+			setup:    func(q *Query[testDoc]) *Query[testDoc] { return q.Where("name", "=", "Alice") },
+			wantSQL:  "SELECT COUNT(*) FROM whisker_users WHERE data->>'name' = $1",
+			wantArgs: []any{"Alice"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &Query[testDoc]{table: "whisker_users"}
+			q = tt.setup(q)
+			gotSQL, gotArgs, err := q.toCountSQL()
+			if err != nil {
+				t.Fatalf("toCountSQL: %v", err)
+			}
+			if gotSQL != tt.wantSQL {
+				t.Errorf("sql:\n got: %s\nwant: %s", gotSQL, tt.wantSQL)
+			}
+			if len(tt.wantArgs) == 0 && len(gotArgs) == 0 {
+				return
+			}
+			if len(gotArgs) != len(tt.wantArgs) {
+				t.Fatalf("args: got %d, want %d", len(gotArgs), len(tt.wantArgs))
+			}
+			for i, a := range gotArgs {
+				if a != tt.wantArgs[i] {
+					t.Errorf("arg[%d]: got %v, want %v", i, a, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestQuery_ExistsSQL(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(q *Query[testDoc]) *Query[testDoc]
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:    "exists all",
+			setup:   func(q *Query[testDoc]) *Query[testDoc] { return q },
+			wantSQL: "SELECT EXISTS(SELECT 1 FROM whisker_users)",
+		},
+		{
+			name:     "exists with where",
+			setup:    func(q *Query[testDoc]) *Query[testDoc] { return q.Where("email", "=", "alice@test.com") },
+			wantSQL:  "SELECT EXISTS(SELECT 1 FROM whisker_users WHERE data->>'email' = $1)",
+			wantArgs: []any{"alice@test.com"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &Query[testDoc]{table: "whisker_users"}
+			q = tt.setup(q)
+			gotSQL, gotArgs, err := q.toExistsSQL()
+			if err != nil {
+				t.Fatalf("toExistsSQL: %v", err)
+			}
+			if gotSQL != tt.wantSQL {
+				t.Errorf("sql:\n got: %s\nwant: %s", gotSQL, tt.wantSQL)
+			}
+			if len(tt.wantArgs) == 0 && len(gotArgs) == 0 {
+				return
+			}
+			if len(gotArgs) != len(tt.wantArgs) {
+				t.Fatalf("args: got %d, want %d", len(gotArgs), len(tt.wantArgs))
+			}
+			for i, a := range gotArgs {
+				if a != tt.wantArgs[i] {
+					t.Errorf("arg[%d]: got %v, want %v", i, a, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
 func TestQuery_InvalidOperator(t *testing.T) {
 	q := &Query[testDoc]{table: "whisker_users"}
 	q = q.Where("name", "DROP TABLE", "x")

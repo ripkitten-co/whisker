@@ -142,19 +142,94 @@ func (q *Query[T]) After(value any) *Query[T] {
 	return c
 }
 
-func (q *Query[T]) toSQL() (string, []any, error) {
-	builder := psql.Select("id", "data", "version").From(q.table)
-
+func (q *Query[T]) applyConditions(builder sq.SelectBuilder) (sq.SelectBuilder, error) {
 	for _, c := range q.conditions {
 		if !allowedOps[c.op] {
-			return "", nil, fmt.Errorf("query: unsupported operator %q", c.op)
+			return builder, fmt.Errorf("query: unsupported operator %q", c.op)
 		}
 		field, err := resolveField(c.field)
 		if err != nil {
-			return "", nil, err
+			return builder, err
 		}
 		expr := fmt.Sprintf("%s %s ?", field, c.op)
 		builder = builder.Where(sq.Expr(expr, c.value))
+	}
+	return builder, nil
+}
+
+func (q *Query[T]) ensureTable(ctx context.Context) error {
+	col := &CollectionOf[T]{
+		name:    q.name,
+		table:   q.table,
+		exec:    q.exec,
+		codec:   q.codec,
+		schema:  q.schema,
+		indexes: q.indexes,
+	}
+	return col.ensure(ctx)
+}
+
+func (q *Query[T]) toCountSQL() (string, []any, error) {
+	builder := psql.Select("COUNT(*)").From(q.table)
+	builder, err := q.applyConditions(builder)
+	if err != nil {
+		return "", nil, err
+	}
+	return builder.ToSql()
+}
+
+func (q *Query[T]) toExistsSQL() (string, []any, error) {
+	builder := psql.Select("1").From(q.table)
+	builder, err := q.applyConditions(builder)
+	if err != nil {
+		return "", nil, err
+	}
+	innerSQL, args, err := builder.ToSql()
+	if err != nil {
+		return "", nil, err
+	}
+	return fmt.Sprintf("SELECT EXISTS(%s)", innerSQL), args, nil
+}
+
+func (q *Query[T]) Count(ctx context.Context) (int64, error) {
+	if err := q.ensureTable(ctx); err != nil {
+		return 0, err
+	}
+	sql, args, err := q.toCountSQL()
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = q.exec.QueryRow(ctx, sql, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("query: count: %w", err)
+	}
+	return count, nil
+}
+
+func (q *Query[T]) Exists(ctx context.Context) (bool, error) {
+	if err := q.ensureTable(ctx); err != nil {
+		return false, err
+	}
+	sql, args, err := q.toExistsSQL()
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	err = q.exec.QueryRow(ctx, sql, args...).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("query: exists: %w", err)
+	}
+	return exists, nil
+}
+
+func (q *Query[T]) toSQL() (string, []any, error) {
+	builder := psql.Select("id", "data", "version").From(q.table)
+
+	var err error
+	builder, err = q.applyConditions(builder)
+	if err != nil {
+		return "", nil, err
 	}
 
 	if q.afterVal != nil {
