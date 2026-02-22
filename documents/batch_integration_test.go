@@ -383,6 +383,124 @@ func TestUpdateMany_EmptySlice(t *testing.T) {
 	}
 }
 
+func TestBatch_InSession_Commit(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	sess, err := store.Session(ctx)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close(ctx)
+
+	users := documents.Collection[User](sess, "batch_sess_commit")
+	err = users.InsertMany(ctx, []*User{
+		{ID: "u1", Name: "Alice", Email: "alice@test.com"},
+		{ID: "u2", Name: "Bob", Email: "bob@test.com"},
+	})
+	if err != nil {
+		t.Fatalf("insert many in session: %v", err)
+	}
+
+	if err := sess.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	outside := documents.Collection[User](store, "batch_sess_commit")
+	for _, id := range []string{"u1", "u2"} {
+		got, err := outside.Load(ctx, id)
+		if err != nil {
+			t.Fatalf("load %s after commit: %v", id, err)
+		}
+		if got.Version != 1 {
+			t.Errorf("%s version = %d, want 1", id, got.Version)
+		}
+	}
+}
+
+func TestBatch_InSession_Rollback(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	sess, err := store.Session(ctx)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+
+	users := documents.Collection[User](sess, "batch_sess_rollback")
+	err = users.InsertMany(ctx, []*User{
+		{ID: "u1", Name: "Alice", Email: "alice@test.com"},
+		{ID: "u2", Name: "Bob", Email: "bob@test.com"},
+	})
+	if err != nil {
+		t.Fatalf("insert many in session: %v", err)
+	}
+
+	sess.Close(ctx)
+
+	outside := documents.Collection[User](store, "batch_sess_rollback")
+	count, err := outside.Count(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0 (data should have been rolled back)", count)
+	}
+}
+
+func TestBatch_MixedWithSingleOps(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	sess, err := store.Session(ctx)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close(ctx)
+
+	users := documents.Collection[User](sess, "batch_sess_mixed")
+
+	if err := users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "alice@test.com"}); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+
+	err = users.InsertMany(ctx, []*User{
+		{ID: "u2", Name: "Bob", Email: "bob@test.com"},
+		{ID: "u3", Name: "Charlie", Email: "charlie@test.com"},
+	})
+	if err != nil {
+		t.Fatalf("insert many: %v", err)
+	}
+
+	if err := users.Delete(ctx, "u2"); err != nil {
+		t.Fatalf("delete u2: %v", err)
+	}
+
+	if err := sess.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	outside := documents.Collection[User](store, "batch_sess_mixed")
+	count, err := outside.Count(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2 (u1 + u3)", count)
+	}
+
+	if _, err := outside.Load(ctx, "u1"); err != nil {
+		t.Errorf("u1 should exist: %v", err)
+	}
+	if _, err := outside.Load(ctx, "u3"); err != nil {
+		t.Errorf("u3 should exist: %v", err)
+	}
+	_, err = outside.Load(ctx, "u2")
+	if !errors.Is(err, whisker.ErrNotFound) {
+		t.Errorf("u2: got %v, want ErrNotFound", err)
+	}
+}
+
 func TestInsertMany_BatchTooLarge(t *testing.T) {
 	connStr := setupConnStr(t)
 	store, err := whisker.New(context.Background(), connStr, whisker.WithMaxBatchSize(2))
