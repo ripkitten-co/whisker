@@ -148,6 +148,9 @@ func (es *Store) ReadAll(ctx context.Context, afterPosition int64, limit int) ([
 	if err := es.schema.EnsureEvents(ctx, es.exec); err != nil {
 		return nil, err
 	}
+	if err := es.schema.EnsureEventsGlobalPositionIndex(ctx, es.exec); err != nil {
+		return nil, err
+	}
 
 	builder := psql.
 		Select("stream_id", "version", "type", "data", "metadata", "created_at", "global_position").

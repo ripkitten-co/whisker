@@ -108,7 +108,9 @@ func (b *Bootstrap) EnsureEvents(ctx context.Context, exec pg.Executor) error {
 }
 
 // EnsureEventsGlobalPositionIndex creates an index on global_position for
-// ordered reads across all streams.
+// ordered reads across all streams. Must be called with a pool-level executor,
+// not a session transaction — CREATE INDEX CONCURRENTLY cannot run inside a
+// transaction block.
 func (b *Bootstrap) EnsureEventsGlobalPositionIndex(ctx context.Context, exec pg.Executor) error {
 	const name = "idx_whisker_events_global_position"
 	if _, ok := b.indexes.Load(name); ok {
