@@ -37,7 +37,7 @@ func rewriteInsert(info *modelInfo, sql string, args []any) (string, []any, erro
 		if !exists {
 			continue
 		}
-		jsonPairs = append(jsonPairs, fmt.Sprintf("'%s', $%d", dc.jsonKey, argIdx))
+		jsonPairs = append(jsonPairs, fmt.Sprintf("'%s', $%d::text", dc.jsonKey, argIdx))
 		newArgs = append(newArgs, val)
 		argIdx++
 	}
@@ -135,7 +135,7 @@ func rewriteUpdate(info *modelInfo, sql string, args []any) (string, []any, erro
 	for i, col := range setCols {
 		for _, dc := range info.dataCols {
 			if strings.EqualFold(col, dc.name) {
-				jsonPairs = append(jsonPairs, fmt.Sprintf("'%s', $%d", dc.jsonKey, argIdx))
+				jsonPairs = append(jsonPairs, fmt.Sprintf("'%s', $%d::text", dc.jsonKey, argIdx))
 				newArgs = append(newArgs, setArgs[i])
 				argIdx++
 				break
