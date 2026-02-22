@@ -94,6 +94,9 @@ func (es *Store) Append(ctx context.Context, streamID string, expectedVersion in
 		return fmt.Errorf("events: append %s: %w", streamID, err)
 	}
 
+	// best-effort notification for projection pollers
+	es.exec.Exec(ctx, "SELECT pg_notify('whisker_events', '')")
+
 	return nil
 }
 

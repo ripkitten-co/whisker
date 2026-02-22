@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/events"
@@ -171,5 +172,40 @@ func TestEvents_GlobalPosition(t *testing.T) {
 		if e.GlobalPosition <= 0 {
 			t.Errorf("stream-a event[%d]: global_position %d should be > 0", i, e.GlobalPosition)
 		}
+	}
+}
+
+func TestEvents_AppendSendsNotification(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	conn, err := store.PgxPool().Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, "LISTEN whisker_events")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	es := events.New(store)
+	err = es.Append(ctx, "notify-test", 0, []events.Event{
+		{Type: "SomethingHappened", Data: []byte(`{}`)},
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	notification, err := conn.Conn().WaitForNotification(waitCtx)
+	if err != nil {
+		t.Fatalf("wait for notification: %v", err)
+	}
+	if notification.Channel != "whisker_events" {
+		t.Errorf("channel: got %q, want %q", notification.Channel, "whisker_events")
 	}
 }
