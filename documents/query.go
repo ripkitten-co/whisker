@@ -66,33 +66,54 @@ type Query[T any] struct {
 	schema     *schema.Bootstrap
 	indexes    []meta.IndexMeta
 	conditions []condition
+	orderBys   []orderByClause
+	limit      *uint64
+	offset     *uint64
+	afterVal   any
+}
+
+func (q *Query[T]) clone() *Query[T] {
+	c := &Query[T]{
+		name:     q.name,
+		table:    q.table,
+		exec:     q.exec,
+		codec:    q.codec,
+		schema:   q.schema,
+		indexes:  q.indexes,
+		limit:    q.limit,
+		offset:   q.offset,
+		afterVal: q.afterVal,
+	}
+	if len(q.conditions) > 0 {
+		c.conditions = make([]condition, len(q.conditions))
+		copy(c.conditions, q.conditions)
+	}
+	if len(q.orderBys) > 0 {
+		c.orderBys = make([]orderByClause, len(q.orderBys))
+		copy(c.orderBys, q.orderBys)
+	}
+	return c
+}
+
+func (c *CollectionOf[T]) Query() *Query[T] {
+	return &Query[T]{
+		name:    c.name,
+		table:   c.table,
+		exec:    c.exec,
+		codec:   c.codec,
+		schema:  c.schema,
+		indexes: c.indexes,
+	}
 }
 
 func (c *CollectionOf[T]) Where(field, op string, value any) *Query[T] {
-	return &Query[T]{
-		name:       c.name,
-		table:      c.table,
-		exec:       c.exec,
-		codec:      c.codec,
-		schema:     c.schema,
-		indexes:    c.indexes,
-		conditions: []condition{{field, op, value}},
-	}
+	return c.Query().Where(field, op, value)
 }
 
 func (q *Query[T]) Where(field, op string, value any) *Query[T] {
-	conds := make([]condition, len(q.conditions), len(q.conditions)+1)
-	copy(conds, q.conditions)
-	conds = append(conds, condition{field, op, value})
-	return &Query[T]{
-		name:       q.name,
-		table:      q.table,
-		exec:       q.exec,
-		codec:      q.codec,
-		schema:     q.schema,
-		indexes:    q.indexes,
-		conditions: conds,
-	}
+	c := q.clone()
+	c.conditions = append(c.conditions, condition{field, op, value})
+	return c
 }
 
 func (q *Query[T]) toSQL() (string, []any, error) {
@@ -102,8 +123,12 @@ func (q *Query[T]) toSQL() (string, []any, error) {
 		if !allowedOps[c.op] {
 			return "", nil, fmt.Errorf("query: unsupported operator %q", c.op)
 		}
-		expr := fmt.Sprintf("data->>? %s ?", c.op)
-		builder = builder.Where(sq.Expr(expr, c.field, c.value))
+		field, err := resolveField(c.field)
+		if err != nil {
+			return "", nil, err
+		}
+		expr := fmt.Sprintf("%s %s ?", field, c.op)
+		builder = builder.Where(sq.Expr(expr, c.value))
 	}
 
 	return builder.ToSql()

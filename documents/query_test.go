@@ -22,16 +22,16 @@ func TestQuery_WhereBuildsSQL(t *testing.T) {
 			field:    "name",
 			op:       "=",
 			value:    "Alice",
-			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>$1 = $2",
-			wantArgs: []any{"name", "Alice"},
+			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>'name' = $1",
+			wantArgs: []any{"Alice"},
 		},
 		{
 			name:     "not equal",
 			field:    "status",
 			op:       "!=",
 			value:    "inactive",
-			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>$1 != $2",
-			wantArgs: []any{"status", "inactive"},
+			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>'status' != $1",
+			wantArgs: []any{"inactive"},
 		},
 	}
 
