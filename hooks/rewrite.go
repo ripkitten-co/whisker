@@ -243,6 +243,18 @@ func renumberArgs(sql string, oldStart, newStart int) string {
 	return result
 }
 
+// rewriteCreateTable replaces an ORM-generated CREATE TABLE with Whisker's
+// standard document table DDL.
+func rewriteCreateTable(info *modelInfo, _ string) (string, error) {
+	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+	id TEXT PRIMARY KEY,
+	data JSONB NOT NULL,
+	version INTEGER NOT NULL DEFAULT 1,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)`, info.table), nil
+}
+
 func extractInsertColumns(sql string) []string {
 	upper := strings.ToUpper(sql)
 	start := strings.IndexByte(upper, '(')

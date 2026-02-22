@@ -129,6 +129,25 @@ func TestRewrite_Update(t *testing.T) {
 	}
 }
 
+func TestRewrite_CreateTable(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "CREATE TABLE IF NOT EXISTS users (id text, name text, email text, version integer)"
+
+	rewritten, err := rewriteCreateTable(info, sql)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "JSONB") {
+		t.Errorf("expected JSONB column: %s", rewritten)
+	}
+}
+
 func TestRewrite_Delete(t *testing.T) {
 	r := newRegistry()
 	r.register("users", analyzeModel[testUser]("users"))
