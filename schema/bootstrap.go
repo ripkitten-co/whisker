@@ -38,6 +38,7 @@ func eventsDDL() string {
 	data JSONB NOT NULL,
 	metadata JSONB,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	global_position BIGINT GENERATED ALWAYS AS IDENTITY,
 	PRIMARY KEY (stream_id, version)
 )`
 }
@@ -103,5 +104,22 @@ func (b *Bootstrap) EnsureEvents(ctx context.Context, exec pg.Executor) error {
 		return fmt.Errorf("schema: create events table: %w", err)
 	}
 	b.tables.Store("whisker_events", true)
+	return nil
+}
+
+// EnsureEventsGlobalPositionIndex creates an index on global_position for
+// ordered reads across all streams.
+func (b *Bootstrap) EnsureEventsGlobalPositionIndex(ctx context.Context, exec pg.Executor) error {
+	const name = "idx_whisker_events_global_position"
+	if _, ok := b.indexes.Load(name); ok {
+		return nil
+	}
+	_, err := exec.Exec(ctx,
+		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_whisker_events_global_position ON whisker_events (global_position)`,
+	)
+	if err != nil {
+		return fmt.Errorf("schema: create events global_position index: %w", err)
+	}
+	b.indexes.Store(name, true)
 	return nil
 }

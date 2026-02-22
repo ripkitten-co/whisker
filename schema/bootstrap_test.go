@@ -25,6 +25,7 @@ func TestEventsDDL(t *testing.T) {
 	data JSONB NOT NULL,
 	metadata JSONB,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	global_position BIGINT GENERATED ALWAYS AS IDENTITY,
 	PRIMARY KEY (stream_id, version)
 )`
 	if ddl != want {

@@ -122,3 +122,54 @@ func TestEvents_ReadStreamEmpty(t *testing.T) {
 		t.Errorf("got %d events, want 0", len(got))
 	}
 }
+
+func TestEvents_GlobalPosition(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	es := events.New(store)
+
+	err := es.Append(ctx, "stream-a", 0, []events.Event{
+		{Type: "A1", Data: []byte(`{"seq":1}`)},
+		{Type: "A2", Data: []byte(`{"seq":2}`)},
+	})
+	if err != nil {
+		t.Fatalf("append stream-a: %v", err)
+	}
+
+	err = es.Append(ctx, "stream-b", 0, []events.Event{
+		{Type: "B1", Data: []byte(`{"seq":3}`)},
+	})
+	if err != nil {
+		t.Fatalf("append stream-b: %v", err)
+	}
+
+	all, err := es.ReadAll(ctx, 0, 100)
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+
+	if len(all) != 3 {
+		t.Fatalf("got %d events, want 3", len(all))
+	}
+
+	for i, e := range all {
+		if e.GlobalPosition <= 0 {
+			t.Errorf("event[%d]: global_position %d should be > 0", i, e.GlobalPosition)
+		}
+		if i > 0 && e.GlobalPosition <= all[i-1].GlobalPosition {
+			t.Errorf("event[%d]: global_position %d not monotonically increasing (prev: %d)",
+				i, e.GlobalPosition, all[i-1].GlobalPosition)
+		}
+	}
+
+	// ReadStream should also populate GlobalPosition
+	streamA, err := es.ReadStream(ctx, "stream-a", 0)
+	if err != nil {
+		t.Fatalf("read stream-a: %v", err)
+	}
+	for i, e := range streamA {
+		if e.GlobalPosition <= 0 {
+			t.Errorf("stream-a event[%d]: global_position %d should be > 0", i, e.GlobalPosition)
+		}
+	}
+}
