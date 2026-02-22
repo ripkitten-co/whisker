@@ -12,7 +12,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 
 ## Development Setup
 
-**Requirements:** Go 1.22+, Docker (for integration tests)
+**Requirements:** Go 1.25+, Docker (for integration tests)
 
 ```bash
 go mod download          # install dependencies
