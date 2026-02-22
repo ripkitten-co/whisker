@@ -220,6 +220,75 @@ func TestQuery_LimitOffsetSQL(t *testing.T) {
 	}
 }
 
+func TestQuery_AfterSQL(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(q *Query[testDoc]) *Query[testDoc]
+		wantSQL  string
+		wantArgs []any
+		wantErr  bool
+	}{
+		{
+			name: "after with asc",
+			setup: func(q *Query[testDoc]) *Query[testDoc] {
+				return q.OrderBy("name", Asc).Limit(10).After("Charlie")
+			},
+			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>'name' > $1 ORDER BY data->>'name' ASC LIMIT 10",
+			wantArgs: []any{"Charlie"},
+		},
+		{
+			name: "after with desc",
+			setup: func(q *Query[testDoc]) *Query[testDoc] {
+				return q.OrderBy("created_at", Desc).Limit(10).After("2024-01-15")
+			},
+			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE created_at < $1 ORDER BY created_at DESC LIMIT 10",
+			wantArgs: []any{"2024-01-15"},
+		},
+		{
+			name: "after with where and order",
+			setup: func(q *Query[testDoc]) *Query[testDoc] {
+				return q.Where("name", "!=", "deleted").OrderBy("name", Asc).After("Bob")
+			},
+			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>'name' != $1 AND data->>'name' > $2 ORDER BY data->>'name' ASC",
+			wantArgs: []any{"deleted", "Bob"},
+		},
+		{
+			name: "after without order by fails",
+			setup: func(q *Query[testDoc]) *Query[testDoc] {
+				return q.After("some-value")
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &Query[testDoc]{table: "whisker_users"}
+			q = tt.setup(q)
+			gotSQL, gotArgs, err := q.toSQL()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("toSQL: %v", err)
+			}
+			if gotSQL != tt.wantSQL {
+				t.Errorf("sql:\n got: %s\nwant: %s", gotSQL, tt.wantSQL)
+			}
+			if len(gotArgs) != len(tt.wantArgs) {
+				t.Fatalf("args: got %v, want %v", gotArgs, tt.wantArgs)
+			}
+			for i, a := range gotArgs {
+				if a != tt.wantArgs[i] {
+					t.Errorf("arg[%d]: got %v, want %v", i, a, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
 func TestQuery_InvalidOperator(t *testing.T) {
 	q := &Query[testDoc]{table: "whisker_users"}
 	q = q.Where("name", "DROP TABLE", "x")

@@ -136,6 +136,12 @@ func (q *Query[T]) Offset(n uint64) *Query[T] {
 	return c
 }
 
+func (q *Query[T]) After(value any) *Query[T] {
+	c := q.clone()
+	c.afterVal = value
+	return c
+}
+
 func (q *Query[T]) toSQL() (string, []any, error) {
 	builder := psql.Select("id", "data", "version").From(q.table)
 
@@ -149,6 +155,22 @@ func (q *Query[T]) toSQL() (string, []any, error) {
 		}
 		expr := fmt.Sprintf("%s %s ?", field, c.op)
 		builder = builder.Where(sq.Expr(expr, c.value))
+	}
+
+	if q.afterVal != nil {
+		if len(q.orderBys) == 0 {
+			return "", nil, fmt.Errorf("query: After requires at least one OrderBy clause")
+		}
+		ob := q.orderBys[0]
+		field, err := resolveField(ob.field)
+		if err != nil {
+			return "", nil, err
+		}
+		op := ">"
+		if ob.direction == Desc {
+			op = "<"
+		}
+		builder = builder.Where(sq.Expr(fmt.Sprintf("%s %s ?", field, op), q.afterVal))
 	}
 
 	if len(q.orderBys) > 0 {
