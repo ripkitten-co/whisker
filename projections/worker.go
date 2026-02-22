@@ -5,22 +5,23 @@ import (
 	"fmt"
 	"hash/fnv"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/events"
-	"github.com/ripkitten-co/whisker/internal/pg"
 )
 
 // Worker drives a single subscriber: poll events, filter, process, checkpoint.
 // Each worker runs in its own goroutine, coordinated by the Daemon.
 type Worker struct {
 	store               *whisker.Store
+	pool                *pgxpool.Pool
 	subscriber          Subscriber
 	checkpoint          *CheckpointStore
 	poller              *Poller
-	exec                pg.Executor
 	batchSize           int
 	maxRetries          int
 	consecutiveFailures int
+	lockConn            *pgxpool.Conn
 }
 
 // NewWorker creates a worker for the given subscriber with sensible defaults
@@ -28,10 +29,10 @@ type Worker struct {
 func NewWorker(store *whisker.Store, sub Subscriber) *Worker {
 	return &Worker{
 		store:      store,
+		pool:       store.PgxPool(),
 		subscriber: sub,
 		checkpoint: NewCheckpointStore(store),
 		poller:     NewPoller(store, 100),
-		exec:       store.DBExecutor(),
 		batchSize:  100,
 		maxRetries: 5,
 	}
@@ -85,23 +86,46 @@ func (w *Worker) ProcessBatch(ctx context.Context) (int, error) {
 	return len(evts), w.checkpoint.Save(ctx, name, evts[len(evts)-1].GlobalPosition)
 }
 
-// TryAcquireLock attempts a PostgreSQL advisory lock keyed by the subscriber
-// name. Returns false if another instance holds the lock.
+// TryAcquireLock acquires a dedicated connection from the pool and attempts a
+// PostgreSQL session-level advisory lock keyed by the subscriber name. The
+// connection is held until ReleaseLock is called, ensuring the lock protects
+// the entire processing cycle. Returns false if another instance holds the lock.
 func (w *Worker) TryAcquireLock(ctx context.Context) (bool, error) {
+	conn, err := w.pool.Acquire(ctx)
+	if err != nil {
+		return false, fmt.Errorf("worker %s: acquire conn: %w", w.subscriber.Name(), err)
+	}
+
 	lockID := lockHash(w.subscriber.Name())
 	var acquired bool
-	err := w.exec.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
+	err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
 	if err != nil {
+		conn.Release()
 		return false, fmt.Errorf("worker %s: acquire lock: %w", w.subscriber.Name(), err)
 	}
-	return acquired, nil
+	if !acquired {
+		conn.Release()
+		return false, nil
+	}
+
+	w.lockConn = conn
+	return true, nil
 }
 
-// ReleaseLock releases the advisory lock acquired by TryAcquireLock.
+// ReleaseLock releases the advisory lock and returns the dedicated connection
+// to the pool.
 func (w *Worker) ReleaseLock(ctx context.Context) error {
+	if w.lockConn == nil {
+		return nil
+	}
+	defer func() {
+		w.lockConn.Release()
+		w.lockConn = nil
+	}()
+
 	lockID := lockHash(w.subscriber.Name())
 	var released bool
-	err := w.exec.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&released)
+	err := w.lockConn.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&released)
 	if err != nil {
 		return fmt.Errorf("worker %s: release lock: %w", w.subscriber.Name(), err)
 	}

@@ -81,6 +81,13 @@ func (b *Bootstrap) IsIndexCreated(name string) bool {
 	return ok
 }
 
+// InvalidateTable removes a table from the creation cache so the next
+// EnsureCollection call will re-run the DDL. Used by Rebuild after dropping
+// a projection table.
+func (b *Bootstrap) InvalidateTable(table string) {
+	b.tables.Delete(table)
+}
+
 // MarkIndexCreated records that the named index has been created.
 func (b *Bootstrap) MarkIndexCreated(name string) {
 	b.indexes.Store(name, true)

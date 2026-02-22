@@ -64,7 +64,10 @@ func (p *Projection[T]) Process(ctx context.Context, evts []events.Event, ps Pro
 
 		var state *T
 		data, version, err := ps.LoadState(ctx, p.name, evt.StreamID)
-		if err == nil && data != nil {
+		if err != nil {
+			return fmt.Errorf("projection %s: load state for %s: %w", p.name, evt.StreamID, err)
+		}
+		if data != nil {
 			state = new(T)
 			if err := codec.Unmarshal(data, state); err != nil {
 				return fmt.Errorf("projection %s: unmarshal state for %s: %w", p.name, evt.StreamID, err)

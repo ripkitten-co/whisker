@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ripkitten-co/whisker"
+	"github.com/ripkitten-co/whisker/schema"
 )
 
 // DaemonOption configures the projection daemon.
@@ -52,6 +53,7 @@ func NewDaemon(store *whisker.Store, opts ...DaemonOption) *Daemon {
 }
 
 // Add registers a subscriber (projection or handler) to be run by the daemon.
+// Must be called before Run.
 func (d *Daemon) Add(sub Subscriber) {
 	d.subscribers = append(d.subscribers, sub)
 }
@@ -63,6 +65,8 @@ func (d *Daemon) Run(ctx context.Context) {
 
 	for _, sub := range d.subscribers {
 		w := NewWorker(d.store, sub)
+		w.batchSize = d.config.batchSize
+		w.poller = NewPoller(d.store, d.config.batchSize)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -122,6 +126,10 @@ func drainBatches(ctx context.Context, w *Worker) {
 // Rebuild drops the read model table for the named projection, resets its
 // checkpoint to zero, and replays all events from the beginning.
 func (d *Daemon) Rebuild(ctx context.Context, name string) error {
+	if err := schema.ValidateCollectionName(name); err != nil {
+		return fmt.Errorf("daemon: rebuild: %w", err)
+	}
+
 	var sub Subscriber
 	for _, s := range d.subscribers {
 		if s.Name() == name {
@@ -133,11 +141,31 @@ func (d *Daemon) Rebuild(ctx context.Context, name string) error {
 		return fmt.Errorf("daemon: subscriber %q not found", name)
 	}
 
+	w := NewWorker(d.store, sub)
+
+	acquired, err := w.TryAcquireLock(ctx)
+	if err != nil {
+		return fmt.Errorf("daemon: rebuild %s: acquire lock: %w", name, err)
+	}
+	if !acquired {
+		return fmt.Errorf("daemon: rebuild %s: another instance holds the lock", name)
+	}
+	defer func() {
+		if err := w.ReleaseLock(ctx); err != nil {
+			slog.Error("release lock", "worker", name, "error", err)
+		}
+	}()
+
 	exec := d.store.DBExecutor()
 
-	_, err := exec.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS whisker_%s", name))
+	_, err = exec.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS whisker_%s", name))
 	if err != nil {
 		return fmt.Errorf("daemon: drop table whisker_%s: %w", name, err)
+	}
+
+	d.store.SchemaBootstrap().InvalidateTable("whisker_" + name)
+	if err := d.store.SchemaBootstrap().EnsureCollection(ctx, exec, name); err != nil {
+		return fmt.Errorf("daemon: recreate table whisker_%s: %w", name, err)
 	}
 
 	cs := NewCheckpointStore(d.store)
@@ -145,20 +173,6 @@ func (d *Daemon) Rebuild(ctx context.Context, name string) error {
 		return fmt.Errorf("daemon: reset checkpoint %s: %w", name, err)
 	}
 
-	// bootstrap cache still thinks the table exists, so recreate manually
-	_, err = exec.Exec(ctx, fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS whisker_%s (
-		id TEXT PRIMARY KEY,
-		data JSONB NOT NULL,
-		version INTEGER NOT NULL DEFAULT 1,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`, name))
-	if err != nil {
-		return fmt.Errorf("daemon: recreate table whisker_%s: %w", name, err)
-	}
-
-	w := NewWorker(d.store, sub)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
