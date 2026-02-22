@@ -5,6 +5,7 @@ package documents_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ripkitten-co/whisker"
@@ -302,5 +303,160 @@ func TestCollection_SessionSkipsIndexCreation(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("index count = %d, want 2 (created outside transaction)", count)
+	}
+}
+
+func TestCollection_OrderBy(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "order_users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Charlie", Email: "c@test.com"})
+	users.Insert(ctx, &User{ID: "u2", Name: "Alice", Email: "a@test.com"})
+	users.Insert(ctx, &User{ID: "u3", Name: "Bob", Email: "b@test.com"})
+
+	results, err := users.Query().OrderBy("name", documents.Asc).Execute(ctx)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+	if results[0].Name != "Alice" || results[1].Name != "Bob" || results[2].Name != "Charlie" {
+		t.Errorf("order: got %s, %s, %s", results[0].Name, results[1].Name, results[2].Name)
+	}
+
+	desc, err := users.Query().OrderBy("name", documents.Desc).Execute(ctx)
+	if err != nil {
+		t.Fatalf("query desc: %v", err)
+	}
+	if desc[0].Name != "Charlie" || desc[2].Name != "Alice" {
+		t.Errorf("desc order: got %s, ..., %s", desc[0].Name, desc[2].Name)
+	}
+}
+
+func TestCollection_LimitOffset(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "limit_users")
+
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("u%d", i)
+		name := fmt.Sprintf("user_%d", i)
+		users.Insert(ctx, &User{ID: id, Name: name, Email: name + "@test.com"})
+	}
+
+	limited, err := users.Query().OrderBy("name", documents.Asc).Limit(2).Execute(ctx)
+	if err != nil {
+		t.Fatalf("limit: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("got %d results, want 2", len(limited))
+	}
+
+	offset, err := users.Query().OrderBy("name", documents.Asc).Limit(2).Offset(3).Execute(ctx)
+	if err != nil {
+		t.Fatalf("offset: %v", err)
+	}
+	if len(offset) != 2 {
+		t.Fatalf("got %d results, want 2", len(offset))
+	}
+	if offset[0].Name != "user_3" {
+		t.Errorf("first after offset: got %s, want user_3", offset[0].Name)
+	}
+}
+
+func TestCollection_AfterCursor(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "cursor_users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "a@test.com"})
+	users.Insert(ctx, &User{ID: "u2", Name: "Bob", Email: "b@test.com"})
+	users.Insert(ctx, &User{ID: "u3", Name: "Charlie", Email: "c@test.com"})
+
+	page, err := users.Query().OrderBy("name", documents.Asc).Limit(10).After("Bob").Execute(ctx)
+	if err != nil {
+		t.Fatalf("after: %v", err)
+	}
+	if len(page) != 1 {
+		t.Fatalf("got %d results, want 1", len(page))
+	}
+	if page[0].Name != "Charlie" {
+		t.Errorf("got %s, want Charlie", page[0].Name)
+	}
+}
+
+func TestCollection_QueryCount(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "count_users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "a@test.com"})
+	users.Insert(ctx, &User{ID: "u2", Name: "Bob", Email: "b@test.com"})
+	users.Insert(ctx, &User{ID: "u3", Name: "Alice", Email: "a2@test.com"})
+
+	total, err := users.Count(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("total: got %d, want 3", total)
+	}
+
+	filtered, err := users.Where("name", "=", "Alice").Count(ctx)
+	if err != nil {
+		t.Fatalf("filtered count: %v", err)
+	}
+	if filtered != 2 {
+		t.Errorf("filtered: got %d, want 2", filtered)
+	}
+}
+
+func TestCollection_QueryExists(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "exists_users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice", Email: "alice@test.com"})
+
+	exists, err := users.Where("name", "=", "Alice").Exists(ctx)
+	if err != nil {
+		t.Fatalf("exists: %v", err)
+	}
+	if !exists {
+		t.Error("expected true")
+	}
+
+	notExists, err := users.Where("name", "=", "Nobody").Exists(ctx)
+	if err != nil {
+		t.Fatalf("not exists: %v", err)
+	}
+	if notExists {
+		t.Error("expected false")
+	}
+}
+
+func TestCollection_ExistsByID(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "exists_id_users")
+
+	users.Insert(ctx, &User{ID: "u1", Name: "Alice"})
+
+	exists, err := users.Exists(ctx, "u1")
+	if err != nil {
+		t.Fatalf("exists: %v", err)
+	}
+	if !exists {
+		t.Error("expected true")
+	}
+
+	notExists, err := users.Exists(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("not exists: %v", err)
+	}
+	if notExists {
+		t.Error("expected false")
 	}
 }
