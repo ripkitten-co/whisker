@@ -1,11 +1,16 @@
+version: "2"
+
 linters:
   enable:
     - gocyclo
-    - gofmt
     - misspell
+  settings:
+    gocyclo:
+      min-complexity: 15
 
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  gofmt:
-    simplify: true
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
