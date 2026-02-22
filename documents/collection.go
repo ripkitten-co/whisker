@@ -7,6 +7,7 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/internal/codecs"
 	"github.com/ripkitten-co/whisker/internal/indexes"
@@ -21,24 +22,26 @@ var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 // Documents are stored as JSONB in a whisker_{name} table with automatic schema
 // creation and optional index management.
 type CollectionOf[T any] struct {
-	name    string
-	table   string
-	exec    pg.Executor
-	codec   codecs.Codec
-	schema  *schema.Bootstrap
-	indexes []meta.IndexMeta
+	name         string
+	table        string
+	exec         pg.Executor
+	codec        codecs.Codec
+	schema       *schema.Bootstrap
+	indexes      []meta.IndexMeta
+	maxBatchSize int
 }
 
 // Collection creates a new typed collection backed by the given store.
 func Collection[T any](b whisker.Backend, name string) *CollectionOf[T] {
 	m := meta.Analyze[T]()
 	return &CollectionOf[T]{
-		name:    name,
-		table:   "whisker_" + name,
-		exec:    b.DBExecutor(),
-		codec:   b.JSONCodec(),
-		schema:  b.SchemaBootstrap(),
-		indexes: m.Indexes,
+		name:         name,
+		table:        "whisker_" + name,
+		exec:         b.DBExecutor(),
+		codec:        b.JSONCodec(),
+		schema:       b.SchemaBootstrap(),
+		indexes:      m.Indexes,
+		maxBatchSize: b.MaxBatchSize(),
 	}
 }
 
@@ -230,4 +233,76 @@ func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 	meta.SetID(&doc, id)
 	meta.SetVersion(&doc, version)
 	return &doc, nil
+}
+
+// InsertMany stores multiple documents in a single INSERT statement.
+// All documents must have non-empty ID fields. On success, each document's
+// Version is set to 1. Returns a BatchError on unique constraint violations.
+func (c *CollectionOf[T]) InsertMany(ctx context.Context, docs []*T) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := c.checkBatchSize(len(docs)); err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	builder := psql.Insert(c.table).Columns("id", "data")
+	ids := make([]string, len(docs))
+
+	for i, doc := range docs {
+		id, err := meta.ExtractID(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: %w", c.name, err)
+		}
+		if id == "" {
+			return fmt.Errorf("collection %s: insert many: document %d: ID must not be empty", c.name, i)
+		}
+		ids[i] = id
+
+		data, err := c.codec.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: insert many %s: marshal: %w", c.name, id, err)
+		}
+		builder = builder.Values(id, data)
+	}
+
+	sql, args, err := builder.ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: insert many: build sql: %w", c.name, err)
+	}
+
+	_, err = c.exec.Exec(ctx, sql, args...)
+	if err != nil {
+		if isPgUniqueViolation(err) {
+			errs := map[string]error{}
+			for _, id := range ids {
+				errs[id] = whisker.ErrDuplicateID
+			}
+			return &BatchError{Op: "insert", Total: len(ids), Errors: errs}
+		}
+		return fmt.Errorf("collection %s: insert many: %w", c.name, err)
+	}
+
+	for _, doc := range docs {
+		meta.SetVersion(doc, 1)
+	}
+	return nil
+}
+
+func (c *CollectionOf[T]) checkBatchSize(n int) error {
+	if c.maxBatchSize > 0 && n > c.maxBatchSize {
+		return fmt.Errorf("collection %s: %w: %d exceeds max %d", c.name, whisker.ErrBatchTooLarge, n, c.maxBatchSize)
+	}
+	return nil
+}
+
+func isPgUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }
