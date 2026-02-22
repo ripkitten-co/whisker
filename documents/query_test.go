@@ -59,6 +59,41 @@ func TestQuery_WhereBuildsSQL(t *testing.T) {
 	}
 }
 
+func TestResolveField(t *testing.T) {
+	tests := []struct {
+		name    string
+		field   string
+		want    string
+		wantErr bool
+	}{
+		{name: "jsonb field", field: "name", want: "data->>'name'"},
+		{name: "table column id", field: "id", want: "id"},
+		{name: "table column version", field: "version", want: "version"},
+		{name: "table column created_at", field: "created_at", want: "created_at"},
+		{name: "table column updated_at", field: "updated_at", want: "updated_at"},
+		{name: "raw jsonb expression", field: "data->'addr'->>'city'", want: "data->'addr'->>'city'"},
+		{name: "empty field", field: "", wantErr: true},
+		{name: "invalid characters", field: "name'; DROP", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveField(tt.field)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestQuery_InvalidOperator(t *testing.T) {
 	q := &Query[testDoc]{table: "whisker_users"}
 	q = q.Where("name", "DROP TABLE", "x")

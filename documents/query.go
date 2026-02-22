@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/ripkitten-co/whisker/internal/codecs"
@@ -10,6 +11,40 @@ import (
 	"github.com/ripkitten-co/whisker/internal/pg"
 	"github.com/ripkitten-co/whisker/schema"
 )
+
+type Direction string
+
+const (
+	Asc  Direction = "ASC"
+	Desc Direction = "DESC"
+)
+
+type orderByClause struct {
+	field     string
+	direction Direction
+}
+
+var knownColumns = map[string]bool{
+	"id": true, "version": true, "created_at": true, "updated_at": true,
+}
+
+func resolveField(field string) (string, error) {
+	if field == "" {
+		return "", fmt.Errorf("query: empty field name")
+	}
+	if knownColumns[field] {
+		return field, nil
+	}
+	if strings.Contains(field, "->") {
+		return field, nil
+	}
+	for _, c := range field {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return "", fmt.Errorf("query: invalid field name %q", field)
+		}
+	}
+	return fmt.Sprintf("data->>'%s'", field), nil
+}
 
 var allowedOps = map[string]bool{
 	"=": true, "!=": true,
