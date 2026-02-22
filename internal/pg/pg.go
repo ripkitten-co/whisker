@@ -9,20 +9,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Executor abstracts pgx query execution. Both Pool and transaction wrappers
+// implement it.
 type Executor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// Transactional indicates whether the executor is running inside a transaction.
 type Transactional interface {
 	InTransaction() bool
 }
 
+// Pool wraps a pgxpool.Pool.
 type Pool struct {
 	pool *pgxpool.Pool
 }
 
+// NewPool connects to PostgreSQL and returns a connection pool.
 func NewPool(ctx context.Context, connString string) (*Pool, error) {
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"unicode"
 )
 
+// StructMeta holds reflection metadata for a document struct: which fields
+// are the ID, version, data, and indexes.
 type StructMeta struct {
 	IDIndex      int
 	VersionIndex int
@@ -15,11 +17,13 @@ type StructMeta struct {
 	Indexes      []IndexMeta
 }
 
+// FieldMeta describes a single data field in a document struct.
 type FieldMeta struct {
 	Index   int
 	JSONKey string
 }
 
+// IndexType distinguishes B-tree and GIN index strategies.
 type IndexType int
 
 const (
@@ -27,6 +31,7 @@ const (
 	IndexGIN
 )
 
+// IndexMeta describes an index to create on a collection.
 type IndexMeta struct {
 	FieldJSONKey string
 	Type         IndexType
@@ -34,10 +39,12 @@ type IndexMeta struct {
 
 var cache sync.Map
 
+// Analyze returns cached struct metadata for type T.
 func Analyze[T any]() *StructMeta {
 	return AnalyzeType(reflect.TypeOf((*T)(nil)).Elem())
 }
 
+// AnalyzeType returns cached struct metadata for the given reflect.Type.
 func AnalyzeType(t reflect.Type) *StructMeta {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -191,6 +198,7 @@ func analyzeValue(doc any) (reflect.Value, *StructMeta) {
 	return v, AnalyzeType(v.Type())
 }
 
+// ExtractID reads the ID field value from a document struct.
 func ExtractID(doc any) (string, error) {
 	v, m := analyzeValue(doc)
 	if m.IDIndex == -1 {
@@ -199,6 +207,8 @@ func ExtractID(doc any) (string, error) {
 	return fmt.Sprint(v.Field(m.IDIndex).Interface()), nil
 }
 
+// ExtractVersion reads the Version field value. Returns (0, false) if the
+// struct has no version field.
 func ExtractVersion(doc any) (int, bool) {
 	v, m := analyzeValue(doc)
 	if m.VersionIndex == -1 {
@@ -207,6 +217,7 @@ func ExtractVersion(doc any) (int, bool) {
 	return int(v.Field(m.VersionIndex).Int()), true
 }
 
+// SetVersion writes the version number into the document's Version field.
 func SetVersion(doc any, version int) {
 	v, m := analyzeValue(doc)
 	if m.VersionIndex == -1 {
@@ -215,6 +226,7 @@ func SetVersion(doc any, version int) {
 	v.Field(m.VersionIndex).SetInt(int64(version))
 }
 
+// SetID writes the id string into the document's ID field.
 func SetID(doc any, id string) {
 	v, m := analyzeValue(doc)
 	if m.IDIndex == -1 {

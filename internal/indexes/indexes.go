@@ -20,6 +20,7 @@ func ginDDL(collection string) string {
 	)
 }
 
+// IndexName returns the conventional index name for a collection and index spec.
 func IndexName(collection string, idx meta.IndexMeta) string {
 	if idx.Type == meta.IndexGIN {
 		return fmt.Sprintf("idx_whisker_%s_data_gin", collection)
@@ -27,6 +28,8 @@ func IndexName(collection string, idx meta.IndexMeta) string {
 	return fmt.Sprintf("idx_whisker_%s_%s", collection, idx.FieldJSONKey)
 }
 
+// IndexDDLs returns CREATE INDEX CONCURRENTLY DDL statements for the given
+// collection and index definitions.
 func IndexDDLs(collection string, indexes []meta.IndexMeta) []string {
 	if len(indexes) == 0 {
 		return nil

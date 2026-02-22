@@ -11,6 +11,8 @@ import (
 
 var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,54}$`)
 
+// ValidateCollectionName checks that name is a valid collection identifier
+// (alphanumeric + underscores, max 55 characters, starts with a letter).
 func ValidateCollectionName(name string) error {
 	if !validName.MatchString(name) {
 		return fmt.Errorf("schema: invalid collection name %q: must be alphanumeric with underscores, max 55 chars", name)
@@ -40,33 +42,41 @@ func eventsDDL() string {
 )`
 }
 
+// Bootstrap manages idempotent creation of Whisker tables and indexes.
+// It caches which tables and indexes have been created to avoid repeated DDL.
 type Bootstrap struct {
 	tables  sync.Map
 	indexes sync.Map
 }
 
+// New returns a Bootstrap with empty caches.
 func New() *Bootstrap {
 	return &Bootstrap{}
 }
 
+// IsCreated reports whether the named table has been created in this session.
 func (b *Bootstrap) IsCreated(table string) bool {
 	_, ok := b.tables.Load(table)
 	return ok
 }
 
+// MarkCreated records that the named table has been created.
 func (b *Bootstrap) MarkCreated(table string) {
 	b.tables.Store(table, true)
 }
 
+// IsIndexCreated reports whether the named index has been created in this session.
 func (b *Bootstrap) IsIndexCreated(name string) bool {
 	_, ok := b.indexes.Load(name)
 	return ok
 }
 
+// MarkIndexCreated records that the named index has been created.
 func (b *Bootstrap) MarkIndexCreated(name string) {
 	b.indexes.Store(name, true)
 }
 
+// EnsureCollection creates the whisker_{name} table if it doesn't exist.
 func (b *Bootstrap) EnsureCollection(ctx context.Context, exec pg.Executor, name string) error {
 	if err := ValidateCollectionName(name); err != nil {
 		return err
@@ -83,6 +93,7 @@ func (b *Bootstrap) EnsureCollection(ctx context.Context, exec pg.Executor, name
 	return nil
 }
 
+// EnsureEvents creates the whisker_events table if it doesn't exist.
 func (b *Bootstrap) EnsureEvents(ctx context.Context, exec pg.Executor) error {
 	if _, ok := b.tables.Load("whisker_events"); ok {
 		return nil
