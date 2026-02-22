@@ -116,6 +116,12 @@ func (q *Query[T]) Where(field, op string, value any) *Query[T] {
 	return c
 }
 
+func (q *Query[T]) OrderBy(field string, dir Direction) *Query[T] {
+	c := q.clone()
+	c.orderBys = append(c.orderBys, orderByClause{field, dir})
+	return c
+}
+
 func (q *Query[T]) toSQL() (string, []any, error) {
 	builder := psql.Select("id", "data", "version").From(q.table)
 
@@ -129,6 +135,18 @@ func (q *Query[T]) toSQL() (string, []any, error) {
 		}
 		expr := fmt.Sprintf("%s %s ?", field, c.op)
 		builder = builder.Where(sq.Expr(expr, c.value))
+	}
+
+	if len(q.orderBys) > 0 {
+		clauses := make([]string, len(q.orderBys))
+		for i, ob := range q.orderBys {
+			field, err := resolveField(ob.field)
+			if err != nil {
+				return "", nil, err
+			}
+			clauses[i] = fmt.Sprintf("%s %s", field, ob.direction)
+		}
+		builder = builder.OrderBy(clauses...)
 	}
 
 	return builder.ToSql()
