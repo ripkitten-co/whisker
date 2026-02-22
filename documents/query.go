@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/ripkitten-co/whisker/internal/codecs"
@@ -10,6 +11,40 @@ import (
 	"github.com/ripkitten-co/whisker/internal/pg"
 	"github.com/ripkitten-co/whisker/schema"
 )
+
+type Direction string
+
+const (
+	Asc  Direction = "ASC"
+	Desc Direction = "DESC"
+)
+
+type orderByClause struct {
+	field     string
+	direction Direction
+}
+
+var knownColumns = map[string]bool{
+	"id": true, "version": true, "created_at": true, "updated_at": true,
+}
+
+func resolveField(field string) (string, error) {
+	if field == "" {
+		return "", fmt.Errorf("query: empty field name")
+	}
+	if knownColumns[field] {
+		return field, nil
+	}
+	if strings.Contains(field, "->") {
+		return field, nil
+	}
+	for _, c := range field {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return "", fmt.Errorf("query: invalid field name %q", field)
+		}
+	}
+	return fmt.Sprintf("data->>'%s'", field), nil
+}
 
 var allowedOps = map[string]bool{
 	"=": true, "!=": true,
@@ -31,44 +66,205 @@ type Query[T any] struct {
 	schema     *schema.Bootstrap
 	indexes    []meta.IndexMeta
 	conditions []condition
+	orderBys   []orderByClause
+	limit      *uint64
+	offset     *uint64
+	afterVal   any
+}
+
+func (q *Query[T]) clone() *Query[T] {
+	c := &Query[T]{
+		name:     q.name,
+		table:    q.table,
+		exec:     q.exec,
+		codec:    q.codec,
+		schema:   q.schema,
+		indexes:  q.indexes,
+		limit:    q.limit,
+		offset:   q.offset,
+		afterVal: q.afterVal,
+	}
+	if len(q.conditions) > 0 {
+		c.conditions = make([]condition, len(q.conditions))
+		copy(c.conditions, q.conditions)
+	}
+	if len(q.orderBys) > 0 {
+		c.orderBys = make([]orderByClause, len(q.orderBys))
+		copy(c.orderBys, q.orderBys)
+	}
+	return c
+}
+
+func (c *CollectionOf[T]) Query() *Query[T] {
+	return &Query[T]{
+		name:    c.name,
+		table:   c.table,
+		exec:    c.exec,
+		codec:   c.codec,
+		schema:  c.schema,
+		indexes: c.indexes,
+	}
 }
 
 func (c *CollectionOf[T]) Where(field, op string, value any) *Query[T] {
-	return &Query[T]{
-		name:       c.name,
-		table:      c.table,
-		exec:       c.exec,
-		codec:      c.codec,
-		schema:     c.schema,
-		indexes:    c.indexes,
-		conditions: []condition{{field, op, value}},
-	}
+	return c.Query().Where(field, op, value)
 }
 
 func (q *Query[T]) Where(field, op string, value any) *Query[T] {
-	conds := make([]condition, len(q.conditions), len(q.conditions)+1)
-	copy(conds, q.conditions)
-	conds = append(conds, condition{field, op, value})
-	return &Query[T]{
-		name:       q.name,
-		table:      q.table,
-		exec:       q.exec,
-		codec:      q.codec,
-		schema:     q.schema,
-		indexes:    q.indexes,
-		conditions: conds,
+	c := q.clone()
+	c.conditions = append(c.conditions, condition{field, op, value})
+	return c
+}
+
+func (q *Query[T]) OrderBy(field string, dir Direction) *Query[T] {
+	c := q.clone()
+	c.orderBys = append(c.orderBys, orderByClause{field, dir})
+	return c
+}
+
+func (q *Query[T]) Limit(n uint64) *Query[T] {
+	c := q.clone()
+	if n > 0 {
+		c.limit = &n
 	}
+	return c
+}
+
+func (q *Query[T]) Offset(n uint64) *Query[T] {
+	c := q.clone()
+	c.offset = &n
+	return c
+}
+
+func (q *Query[T]) After(value any) *Query[T] {
+	c := q.clone()
+	c.afterVal = value
+	return c
+}
+
+func (q *Query[T]) applyConditions(builder sq.SelectBuilder) (sq.SelectBuilder, error) {
+	for _, c := range q.conditions {
+		if !allowedOps[c.op] {
+			return builder, fmt.Errorf("query: unsupported operator %q", c.op)
+		}
+		field, err := resolveField(c.field)
+		if err != nil {
+			return builder, err
+		}
+		expr := fmt.Sprintf("%s %s ?", field, c.op)
+		builder = builder.Where(sq.Expr(expr, c.value))
+	}
+	return builder, nil
+}
+
+func (q *Query[T]) ensureTable(ctx context.Context) error {
+	col := &CollectionOf[T]{
+		name:    q.name,
+		table:   q.table,
+		exec:    q.exec,
+		codec:   q.codec,
+		schema:  q.schema,
+		indexes: q.indexes,
+	}
+	return col.ensure(ctx)
+}
+
+func (q *Query[T]) toCountSQL() (string, []any, error) {
+	builder := psql.Select("COUNT(*)").From(q.table)
+	builder, err := q.applyConditions(builder)
+	if err != nil {
+		return "", nil, err
+	}
+	return builder.ToSql()
+}
+
+func (q *Query[T]) toExistsSQL() (string, []any, error) {
+	builder := psql.Select("1").From(q.table)
+	builder, err := q.applyConditions(builder)
+	if err != nil {
+		return "", nil, err
+	}
+	innerSQL, args, err := builder.ToSql()
+	if err != nil {
+		return "", nil, err
+	}
+	return fmt.Sprintf("SELECT EXISTS(%s)", innerSQL), args, nil
+}
+
+func (q *Query[T]) Count(ctx context.Context) (int64, error) {
+	if err := q.ensureTable(ctx); err != nil {
+		return 0, err
+	}
+	sql, args, err := q.toCountSQL()
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = q.exec.QueryRow(ctx, sql, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("query: count: %w", err)
+	}
+	return count, nil
+}
+
+func (q *Query[T]) Exists(ctx context.Context) (bool, error) {
+	if err := q.ensureTable(ctx); err != nil {
+		return false, err
+	}
+	sql, args, err := q.toExistsSQL()
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	err = q.exec.QueryRow(ctx, sql, args...).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("query: exists: %w", err)
+	}
+	return exists, nil
 }
 
 func (q *Query[T]) toSQL() (string, []any, error) {
 	builder := psql.Select("id", "data", "version").From(q.table)
 
-	for _, c := range q.conditions {
-		if !allowedOps[c.op] {
-			return "", nil, fmt.Errorf("query: unsupported operator %q", c.op)
+	var err error
+	builder, err = q.applyConditions(builder)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if q.afterVal != nil {
+		if len(q.orderBys) == 0 {
+			return "", nil, fmt.Errorf("query: After requires at least one OrderBy clause")
 		}
-		expr := fmt.Sprintf("data->>? %s ?", c.op)
-		builder = builder.Where(sq.Expr(expr, c.field, c.value))
+		ob := q.orderBys[0]
+		field, err := resolveField(ob.field)
+		if err != nil {
+			return "", nil, err
+		}
+		op := ">"
+		if ob.direction == Desc {
+			op = "<"
+		}
+		builder = builder.Where(sq.Expr(fmt.Sprintf("%s %s ?", field, op), q.afterVal))
+	}
+
+	if len(q.orderBys) > 0 {
+		clauses := make([]string, len(q.orderBys))
+		for i, ob := range q.orderBys {
+			field, err := resolveField(ob.field)
+			if err != nil {
+				return "", nil, err
+			}
+			clauses[i] = fmt.Sprintf("%s %s", field, ob.direction)
+		}
+		builder = builder.OrderBy(clauses...)
+	}
+
+	if q.limit != nil {
+		builder = builder.Limit(*q.limit)
+	}
+	if q.offset != nil {
+		builder = builder.Offset(*q.offset)
 	}
 
 	return builder.ToSql()

@@ -167,6 +167,28 @@ func (c *CollectionOf[T]) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (c *CollectionOf[T]) Count(ctx context.Context) (int64, error) {
+	return c.Query().Count(ctx)
+}
+
+func (c *CollectionOf[T]) Exists(ctx context.Context, id string) (bool, error) {
+	if err := c.ensure(ctx); err != nil {
+		return false, err
+	}
+	builder := psql.Select("1").From(c.table).Where(sq.Eq{"id": id})
+	innerSQL, args, err := builder.ToSql()
+	if err != nil {
+		return false, fmt.Errorf("collection %s: exists: build sql: %w", c.name, err)
+	}
+	sql := fmt.Sprintf("SELECT EXISTS(%s)", innerSQL)
+	var exists bool
+	err = c.exec.QueryRow(ctx, sql, args...).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("collection %s: exists %s: %w", c.name, id, err)
+	}
+	return exists, nil
+}
+
 func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 	if err := c.ensure(ctx); err != nil {
 		return nil, err

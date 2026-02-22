@@ -67,6 +67,27 @@ orders.Delete(ctx, "o1")
 // Queries
 results, _ := orders.Where("item", "=", "widget").Execute(ctx)
 results, _  = orders.Where("total", ">", 50).Where("item", "!=", "gizmo").Execute(ctx)
+
+// Sorting and pagination
+results, _ = orders.Query().
+    OrderBy("total", documents.Desc).
+    Limit(20).
+    Offset(40).
+    Execute(ctx)
+
+// Cursor-based pagination
+nextPage, _ := orders.Query().
+    OrderBy("created_at", documents.Asc).
+    Limit(20).
+    After("2024-01-15T10:00:00Z").
+    Execute(ctx)
+
+// Aggregates
+count, _ := orders.Count(ctx)
+count, _  = orders.Where("item", "=", "widget").Count(ctx)
+
+exists, _ := orders.Exists(ctx, "o1")
+exists, _  = orders.Where("item", "=", "widget").Exists(ctx)
 ```
 
 ### Event Streams
@@ -114,12 +135,12 @@ store, _ := whisker.New(ctx, connString,
 
 Whisker is in early development. Here's what's coming:
 
+- [x] `Count()`, `Exists()`, `OrderBy`, `Limit`/`Offset`, cursor pagination
+- [x] JSONB indexes (btree + GIN) via struct tags
 - [ ] Projections (rebuild read models from event streams)
 - [ ] Subscriptions (react to new events in real-time)
 - [ ] Batch operations
 - [ ] Soft deletes
-- [ ] GIN indexes on JSONB fields
-- [ ] `Count()` and `Exists()` queries
 
 Want something else? [Open an issue.](https://github.com/ripkitten-co/whisker/issues)
 
