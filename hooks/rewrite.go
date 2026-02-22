@@ -376,6 +376,38 @@ func rewriteQualifiedRefs(sql string, aliases []tableAlias) string {
 	return sql
 }
 
+// parseQuotedString reads a single-quoted SQL string starting after the
+// opening quote at rest[pos]. Returns the unescaped value and the index
+// after the closing quote.
+func parseQuotedString(rest string, pos int) (string, int) {
+	var sb strings.Builder
+	i := pos
+	for i < len(rest) {
+		if rest[i] == '\'' {
+			if i+1 < len(rest) && rest[i+1] == '\'' {
+				sb.WriteByte('\'')
+				i += 2
+				continue
+			}
+			i++ // skip closing quote
+			break
+		}
+		sb.WriteByte(rest[i])
+		i++
+	}
+	return sb.String(), i
+}
+
+// parseUnquotedToken reads an unquoted value (number, NULL, etc.) starting
+// at rest[pos]. Returns the trimmed token and the index after it.
+func parseUnquotedToken(rest string, pos int) (string, int) {
+	start := pos
+	for pos < len(rest) && rest[pos] != ',' && rest[pos] != ')' && rest[pos] != ' ' {
+		pos++
+	}
+	return strings.TrimSpace(rest[start:pos]), pos
+}
+
 // extractInlineValues parses the VALUES (...) clause and returns each
 // value as a string. Handles single-quoted strings, numeric literals, and NULL.
 // Example: VALUES ('hello', 42, NULL) -> ["hello", "42", "NULL"]
@@ -392,7 +424,6 @@ func extractInlineValues(sql string) []any {
 	}
 	rest = rest[openParen+1:]
 
-	// find the matching close paren, respecting quoted strings
 	var vals []any
 	i := 0
 	for i < len(rest) {
@@ -404,33 +435,15 @@ func extractInlineValues(sql string) []any {
 		}
 
 		if rest[i] == '\'' {
-			// quoted string value
-			i++ // skip opening quote
-			var sb strings.Builder
-			for i < len(rest) {
-				if rest[i] == '\'' {
-					if i+1 < len(rest) && rest[i+1] == '\'' {
-						sb.WriteByte('\'')
-						i += 2
-						continue
-					}
-					i++ // skip closing quote
-					break
-				}
-				sb.WriteByte(rest[i])
-				i++
-			}
-			vals = append(vals, sb.String())
+			val, next := parseQuotedString(rest, i+1)
+			vals = append(vals, val)
+			i = next
 		} else {
-			// unquoted token (number, NULL, etc.)
-			start := i
-			for i < len(rest) && rest[i] != ',' && rest[i] != ')' && rest[i] != ' ' {
-				i++
-			}
-			vals = append(vals, strings.TrimSpace(rest[start:i]))
+			val, next := parseUnquotedToken(rest, i)
+			vals = append(vals, val)
+			i = next
 		}
 
-		// skip comma separator
 		for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == ',') {
 			i++
 		}

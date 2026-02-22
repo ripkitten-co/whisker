@@ -6,12 +6,14 @@ import "github.com/ripkitten-co/whisker/internal/codecs"
 type Option func(*storeConfig)
 
 type storeConfig struct {
-	codec codecs.Codec
+	codec        codecs.Codec
+	maxBatchSize int
 }
 
 func defaultConfig() *storeConfig {
 	return &storeConfig{
-		codec: codecs.NewJSONIter(),
+		codec:        codecs.NewJSONIter(),
+		maxBatchSize: 1000,
 	}
 }
 
@@ -19,5 +21,12 @@ func defaultConfig() *storeConfig {
 func WithCodec(c codecs.Codec) Option {
 	return func(cfg *storeConfig) {
 		cfg.codec = c
+	}
+}
+
+// WithMaxBatchSize sets the maximum number of documents per batch operation.
+func WithMaxBatchSize(n int) Option {
+	return func(cfg *storeConfig) {
+		cfg.maxBatchSize = n
 	}
 }

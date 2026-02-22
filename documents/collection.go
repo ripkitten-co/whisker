@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/internal/codecs"
 	"github.com/ripkitten-co/whisker/internal/indexes"
@@ -21,24 +23,26 @@ var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 // Documents are stored as JSONB in a whisker_{name} table with automatic schema
 // creation and optional index management.
 type CollectionOf[T any] struct {
-	name    string
-	table   string
-	exec    pg.Executor
-	codec   codecs.Codec
-	schema  *schema.Bootstrap
-	indexes []meta.IndexMeta
+	name         string
+	table        string
+	exec         pg.Executor
+	codec        codecs.Codec
+	schema       *schema.Bootstrap
+	indexes      []meta.IndexMeta
+	maxBatchSize int
 }
 
 // Collection creates a new typed collection backed by the given store.
 func Collection[T any](b whisker.Backend, name string) *CollectionOf[T] {
 	m := meta.Analyze[T]()
 	return &CollectionOf[T]{
-		name:    name,
-		table:   "whisker_" + name,
-		exec:    b.DBExecutor(),
-		codec:   b.JSONCodec(),
-		schema:  b.SchemaBootstrap(),
-		indexes: m.Indexes,
+		name:         name,
+		table:        "whisker_" + name,
+		exec:         b.DBExecutor(),
+		codec:        b.JSONCodec(),
+		schema:       b.SchemaBootstrap(),
+		indexes:      m.Indexes,
+		maxBatchSize: b.MaxBatchSize(),
 	}
 }
 
@@ -230,4 +234,355 @@ func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 	meta.SetID(&doc, id)
 	meta.SetVersion(&doc, version)
 	return &doc, nil
+}
+
+// InsertMany stores multiple documents in a single INSERT statement.
+// All documents must have non-empty ID fields. On success, each document's
+// Version is set to 1. On a unique constraint violation, the returned BatchError
+// may attribute the failure to all document IDs because PostgreSQL does not
+// identify the specific conflicting row in a multi-row insert. When possible,
+// the conflicting ID is extracted from the PG error detail.
+func (c *CollectionOf[T]) InsertMany(ctx context.Context, docs []*T) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := c.checkBatchSize(len(docs)); err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	builder := psql.Insert(c.table).Columns("id", "data")
+	ids := make([]string, len(docs))
+
+	for i, doc := range docs {
+		id, err := meta.ExtractID(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: %w", c.name, err)
+		}
+		if id == "" {
+			return fmt.Errorf("collection %s: insert many: document %d: ID must not be empty", c.name, i)
+		}
+		ids[i] = id
+
+		data, err := c.codec.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: insert many %s: marshal: %w", c.name, id, err)
+		}
+		builder = builder.Values(id, data)
+	}
+
+	sql, args, err := builder.ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: insert many: build sql: %w", c.name, err)
+	}
+
+	_, err = c.exec.Exec(ctx, sql, args...)
+	if err != nil {
+		if isPgUniqueViolation(err) {
+			var pgErr *pgconn.PgError
+			errors.As(err, &pgErr)
+			errs := map[string]error{}
+			if conflictID := extractConflictID(pgErr.Detail); conflictID != "" {
+				errs[conflictID] = whisker.ErrDuplicateID
+			} else {
+				for _, id := range ids {
+					errs[id] = whisker.ErrDuplicateID
+				}
+			}
+			return &BatchError{Op: "insert", Total: len(ids), Errors: errs}
+		}
+		return fmt.Errorf("collection %s: insert many: %w", c.name, err)
+	}
+
+	for _, doc := range docs {
+		meta.SetVersion(doc, 1)
+	}
+	return nil
+}
+
+// LoadMany retrieves multiple documents by ID in a single SELECT with WHERE IN.
+// Documents are returned in no guaranteed order. If some IDs are missing, the found
+// documents are returned alongside a BatchError listing the missing IDs.
+func (c *CollectionOf[T]) LoadMany(ctx context.Context, ids []string) ([]*T, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if err := c.checkBatchSize(len(ids)); err != nil {
+		return nil, err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return nil, err
+	}
+
+	query, args, err := psql.Select("id", "data", "version").
+		From(c.table).
+		Where(sq.Eq{"id": ids}).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("collection %s: load many: build sql: %w", c.name, err)
+	}
+
+	rows, err := c.exec.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("collection %s: load many: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	foundIDs := make(map[string]bool, len(ids))
+	docs := make([]*T, 0, len(ids))
+
+	for rows.Next() {
+		var id string
+		var data []byte
+		var version int
+		if err := rows.Scan(&id, &data, &version); err != nil {
+			return nil, fmt.Errorf("collection %s: load many: scan: %w", c.name, err)
+		}
+
+		var doc T
+		if err := c.codec.Unmarshal(data, &doc); err != nil {
+			return nil, fmt.Errorf("collection %s: load many %s: unmarshal: %w", c.name, id, err)
+		}
+
+		meta.SetID(&doc, id)
+		meta.SetVersion(&doc, version)
+		docs = append(docs, &doc)
+		foundIDs[id] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("collection %s: load many: %w", c.name, err)
+	}
+
+	if len(foundIDs) < len(ids) {
+		errs := map[string]error{}
+		for _, id := range ids {
+			if !foundIDs[id] {
+				errs[id] = whisker.ErrNotFound
+			}
+		}
+		return docs, &BatchError{Op: "load", Total: len(ids), Errors: errs}
+	}
+
+	return docs, nil
+}
+
+// DeleteMany removes multiple documents by ID in a single DELETE with WHERE IN.
+// Uses RETURNING id to identify which requested IDs were actually deleted, then
+// reports missing IDs via a BatchError. Found documents are always deleted, even
+// when some IDs are missing.
+func (c *CollectionOf[T]) DeleteMany(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := c.checkBatchSize(len(ids)); err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	query, args, err := psql.Delete(c.table).
+		Where(sq.Eq{"id": ids}).
+		Suffix("RETURNING id").
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: delete many: build sql: %w", c.name, err)
+	}
+
+	rows, err := c.exec.Query(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: delete many: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	deleted := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("collection %s: delete many: scan: %w", c.name, err)
+		}
+		deleted[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("collection %s: delete many: %w", c.name, err)
+	}
+
+	if len(deleted) < len(ids) {
+		errs := map[string]error{}
+		for _, id := range ids {
+			if !deleted[id] {
+				errs[id] = whisker.ErrNotFound
+			}
+		}
+		return &BatchError{Op: "delete", Total: len(ids), Errors: errs}
+	}
+	return nil
+}
+
+type docInfo struct {
+	id         string
+	data       []byte
+	oldVersion int
+	newVersion int
+}
+
+// UpdateMany updates multiple documents in a single UPDATE...FROM VALUES statement.
+// Optimistic concurrency is enforced per document — if any document's version has
+// changed since it was loaded, the entire batch fails with a BatchError identifying
+// which documents had version conflicts vs which were missing.
+func (c *CollectionOf[T]) UpdateMany(ctx context.Context, docs []*T) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := c.checkBatchSize(len(docs)); err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	infos := make([]docInfo, len(docs))
+	seen := make(map[string]bool, len(docs))
+	for i, doc := range docs {
+		id, err := meta.ExtractID(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: %w", c.name, err)
+		}
+		if seen[id] {
+			return fmt.Errorf("collection %s: update many: duplicate id %s in batch", c.name, id)
+		}
+		seen[id] = true
+
+		currentVersion, _ := meta.ExtractVersion(doc)
+		data, err := c.codec.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: update many %s: marshal: %w", c.name, id, err)
+		}
+
+		infos[i] = docInfo{
+			id:         id,
+			data:       data,
+			oldVersion: currentVersion,
+			newVersion: currentVersion + 1,
+		}
+	}
+
+	args := make([]any, 0, len(infos)*4)
+	valueClauses := make([]string, len(infos))
+	for i, info := range infos {
+		base := i * 4
+		valueClauses[i] = fmt.Sprintf("($%d::text, $%d::jsonb, $%d::int, $%d::int)",
+			base+1, base+2, base+3, base+4)
+		args = append(args, info.id, info.data, info.newVersion, info.oldVersion)
+	}
+
+	sql := fmt.Sprintf(
+		`UPDATE %s AS t SET data = v.data, version = v.new_version, updated_at = now() `+
+			`FROM (VALUES %s) AS v(id, data, new_version, old_version) `+
+			`WHERE t.id = v.id AND t.version = v.old_version `+
+			`RETURNING t.id`,
+		c.table, strings.Join(valueClauses, ", "))
+
+	rows, err := c.exec.Query(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: update many: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	updated := make(map[string]bool, len(docs))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("collection %s: update many: scan: %w", c.name, err)
+		}
+		updated[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("collection %s: update many: %w", c.name, err)
+	}
+
+	if len(updated) < len(docs) {
+		return c.identifyUpdateFailures(ctx, infos, updated)
+	}
+
+	for i, doc := range docs {
+		meta.SetVersion(doc, infos[i].newVersion)
+	}
+	return nil
+}
+
+func (c *CollectionOf[T]) identifyUpdateFailures(ctx context.Context, infos []docInfo, updated map[string]bool) error {
+	// collect IDs that failed
+	var failedIDs []string
+	for _, info := range infos {
+		if !updated[info.id] {
+			failedIDs = append(failedIDs, info.id)
+		}
+	}
+
+	// re-query to distinguish "not found" from "version conflict"
+	query, args, err := psql.Select("id").From(c.table).Where(sq.Eq{"id": failedIDs}).ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: update many: identify failures: %w", c.name, err)
+	}
+
+	rows, err := c.exec.Query(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: update many: identify failures: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("collection %s: update many: scan: %w", c.name, err)
+		}
+		existing[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("collection %s: update many: %w", c.name, err)
+	}
+
+	errs := map[string]error{}
+	for _, id := range failedIDs {
+		if existing[id] {
+			errs[id] = whisker.ErrConcurrencyConflict
+		} else {
+			errs[id] = whisker.ErrNotFound
+		}
+	}
+	return &BatchError{Op: "update", Total: len(infos), Errors: errs}
+}
+
+func (c *CollectionOf[T]) checkBatchSize(n int) error {
+	if c.maxBatchSize > 0 && n > c.maxBatchSize {
+		return fmt.Errorf("collection %s: %w: %d exceeds max %d", c.name, whisker.ErrBatchTooLarge, n, c.maxBatchSize)
+	}
+	return nil
+}
+
+func isPgUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
+}
+
+// Detail format: "Key (id)=(somevalue) already exists."
+func extractConflictID(detail string) string {
+	start := strings.Index(detail, "(id)=(")
+	if start == -1 {
+		return ""
+	}
+	start += len("(id)=(")
+	end := strings.Index(detail[start:], ")")
+	if end == -1 {
+		return ""
+	}
+	return detail[start : start+end]
 }

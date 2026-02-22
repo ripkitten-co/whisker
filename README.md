@@ -201,7 +201,7 @@ Whisker is in early development. Here's what's coming:
 - [x] ORM hooks (GORM, Ent, Bun adapters)
 - [x] Projections (rebuild read models from event streams)
 - [x] Subscriptions (react to new events in real-time)
-- [ ] Batch operations
+- [x] Batch operations
 - [ ] Soft deletes
 
 Want something else? [Open an issue.](https://github.com/ripkitten-co/whisker/issues)

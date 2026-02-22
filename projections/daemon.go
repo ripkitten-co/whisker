@@ -125,20 +125,23 @@ func drainBatches(ctx context.Context, w *Worker) {
 
 // Rebuild drops the read model table for the named projection, resets its
 // checkpoint to zero, and replays all events from the beginning.
+func (d *Daemon) findSubscriber(name string) (Subscriber, error) {
+	for _, s := range d.subscribers {
+		if s.Name() == name {
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("daemon: subscriber %q not found", name)
+}
+
 func (d *Daemon) Rebuild(ctx context.Context, name string) error {
 	if err := schema.ValidateCollectionName(name); err != nil {
 		return fmt.Errorf("daemon: rebuild: %w", err)
 	}
 
-	var sub Subscriber
-	for _, s := range d.subscribers {
-		if s.Name() == name {
-			sub = s
-			break
-		}
-	}
-	if sub == nil {
-		return fmt.Errorf("daemon: subscriber %q not found", name)
+	sub, err := d.findSubscriber(name)
+	if err != nil {
+		return err
 	}
 
 	w := NewWorker(d.store, sub)

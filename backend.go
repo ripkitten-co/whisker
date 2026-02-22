@@ -7,9 +7,10 @@ import (
 )
 
 type backend struct {
-	exec   pg.Executor
-	codec  codecs.Codec
-	schema *schema.Bootstrap
+	exec         pg.Executor
+	codec        codecs.Codec
+	schema       *schema.Bootstrap
+	maxBatchSize int
 }
 
 // Backend provides access to the core Whisker subsystems: database executor,
@@ -18,4 +19,5 @@ type Backend interface {
 	DBExecutor() pg.Executor
 	JSONCodec() codecs.Codec
 	SchemaBootstrap() *schema.Bootstrap
+	MaxBatchSize() int
 }
