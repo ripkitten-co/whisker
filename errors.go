@@ -16,9 +16,6 @@ var (
 	// ErrDuplicateID is returned when inserting a document with an ID that already exists.
 	ErrDuplicateID = errors.New("duplicate id")
 
-	// ErrVersionConflict is returned when a batch update encounters a version mismatch.
-	ErrVersionConflict = errors.New("version conflict")
-
 	// ErrBatchTooLarge is returned when a batch exceeds the configured maximum size.
 	ErrBatchTooLarge = errors.New("batch too large")
 )

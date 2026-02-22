@@ -24,15 +24,3 @@ func (e *BatchError) Unwrap() []error {
 	return errs
 }
 
-func newBatchError(op string, total int, errs ...map[string]error) *BatchError {
-	merged := map[string]error{}
-	for _, m := range errs {
-		for k, v := range m {
-			merged[k] = v
-		}
-	}
-	if len(merged) == 0 {
-		return nil
-	}
-	return &BatchError{Op: op, Total: total, Errors: merged}
-}

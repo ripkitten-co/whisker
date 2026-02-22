@@ -365,8 +365,8 @@ func TestUpdateMany_VersionConflict(t *testing.T) {
 	if len(batchErr.Errors) != 1 {
 		t.Fatalf("errors count = %d, want 1", len(batchErr.Errors))
 	}
-	if !errors.Is(batchErr.Errors["u1"], whisker.ErrVersionConflict) {
-		t.Errorf("u1 error = %v, want ErrVersionConflict", batchErr.Errors["u1"])
+	if !errors.Is(batchErr.Errors["u1"], whisker.ErrConcurrencyConflict) {
+		t.Errorf("u1 error = %v, want ErrConcurrencyConflict", batchErr.Errors["u1"])
 	}
 }
 

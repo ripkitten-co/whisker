@@ -32,7 +32,7 @@ func TestBatchError_Error(t *testing.T) {
 				Op:    "update",
 				Total: 3,
 				Errors: map[string]error{
-					"doc-2": whisker.ErrVersionConflict,
+					"doc-2": whisker.ErrConcurrencyConflict,
 				},
 			},
 			want: "batch update: 1 of 3 documents failed",
@@ -108,34 +108,18 @@ func TestBatchError_IsMatchesInnerErrors(t *testing.T) {
 		Total: 5,
 		Errors: map[string]error{
 			"doc-1": whisker.ErrDuplicateID,
-			"doc-2": fmt.Errorf("collection users: update doc-2: %w", whisker.ErrVersionConflict),
+			"doc-2": fmt.Errorf("collection users: update doc-2: %w", whisker.ErrConcurrencyConflict),
 		},
 	}
 
 	if !errors.Is(be, whisker.ErrDuplicateID) {
 		t.Error("errors.Is should match ErrDuplicateID through Unwrap")
 	}
-	if !errors.Is(be, whisker.ErrVersionConflict) {
-		t.Error("errors.Is should match ErrVersionConflict through Unwrap")
+	if !errors.Is(be, whisker.ErrConcurrencyConflict) {
+		t.Error("errors.Is should match ErrConcurrencyConflict through Unwrap")
 	}
 	if errors.Is(be, whisker.ErrNotFound) {
 		t.Error("errors.Is should not match ErrNotFound when not present")
 	}
 }
 
-func TestBatchError_NilWhenNoErrors(t *testing.T) {
-	got := newBatchError("insert", 5)
-	if got != nil {
-		t.Errorf("expected nil, got %v", got)
-	}
-
-	got = newBatchError("insert", 5, nil)
-	if got != nil {
-		t.Errorf("expected nil for nil map, got %v", got)
-	}
-
-	got = newBatchError("insert", 5, map[string]error{})
-	if got != nil {
-		t.Errorf("expected nil for empty map, got %v", got)
-	}
-}

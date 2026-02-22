@@ -238,7 +238,10 @@ func (c *CollectionOf[T]) Load(ctx context.Context, id string) (*T, error) {
 
 // InsertMany stores multiple documents in a single INSERT statement.
 // All documents must have non-empty ID fields. On success, each document's
-// Version is set to 1. Returns a BatchError on unique constraint violations.
+// Version is set to 1. On a unique constraint violation, the returned BatchError
+// may attribute the failure to all document IDs because PostgreSQL does not
+// identify the specific conflicting row in a multi-row insert. When possible,
+// the conflicting ID is extracted from the PG error detail.
 func (c *CollectionOf[T]) InsertMany(ctx context.Context, docs []*T) error {
 	if len(docs) == 0 {
 		return nil
@@ -278,9 +281,15 @@ func (c *CollectionOf[T]) InsertMany(ctx context.Context, docs []*T) error {
 	_, err = c.exec.Exec(ctx, sql, args...)
 	if err != nil {
 		if isPgUniqueViolation(err) {
+			var pgErr *pgconn.PgError
+			errors.As(err, &pgErr)
 			errs := map[string]error{}
-			for _, id := range ids {
-				errs[id] = whisker.ErrDuplicateID
+			if conflictID := extractConflictID(pgErr.Detail); conflictID != "" {
+				errs[conflictID] = whisker.ErrDuplicateID
+			} else {
+				for _, id := range ids {
+					errs[id] = whisker.ErrDuplicateID
+				}
 			}
 			return &BatchError{Op: "insert", Total: len(ids), Errors: errs}
 		}
@@ -436,11 +445,16 @@ func (c *CollectionOf[T]) UpdateMany(ctx context.Context, docs []*T) error {
 	}
 
 	infos := make([]docInfo, len(docs))
+	seen := make(map[string]bool, len(docs))
 	for i, doc := range docs {
 		id, err := meta.ExtractID(doc)
 		if err != nil {
 			return fmt.Errorf("collection %s: %w", c.name, err)
 		}
+		if seen[id] {
+			return fmt.Errorf("collection %s: update many: duplicate id %s in batch", c.name, id)
+		}
+		seen[id] = true
 
 		currentVersion, _ := meta.ExtractVersion(doc)
 		data, err := c.codec.Marshal(doc)
@@ -536,7 +550,7 @@ func (c *CollectionOf[T]) identifyUpdateFailures(ctx context.Context, infos []do
 	errs := map[string]error{}
 	for _, id := range failedIDs {
 		if existing[id] {
-			errs[id] = whisker.ErrVersionConflict
+			errs[id] = whisker.ErrConcurrencyConflict
 		} else {
 			errs[id] = whisker.ErrNotFound
 		}
@@ -557,4 +571,18 @@ func isPgUniqueViolation(err error) bool {
 		return pgErr.Code == "23505"
 	}
 	return false
+}
+
+// Detail format: "Key (id)=(somevalue) already exists."
+func extractConflictID(detail string) string {
+	start := strings.Index(detail, "(id)=(")
+	if start == -1 {
+		return ""
+	}
+	start += len("(id)=(")
+	end := strings.Index(detail[start:], ")")
+	if end == -1 {
+		return ""
+	}
+	return detail[start : start+end]
 }
