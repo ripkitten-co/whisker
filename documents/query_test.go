@@ -158,6 +158,68 @@ func TestQuery_OrderBySQL(t *testing.T) {
 	}
 }
 
+func TestQuery_LimitOffsetSQL(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(q *Query[testDoc]) *Query[testDoc]
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:    "limit only",
+			setup:   func(q *Query[testDoc]) *Query[testDoc] { return q.Limit(10) },
+			wantSQL: "SELECT id, data, version FROM whisker_users LIMIT 10",
+		},
+		{
+			name:    "offset only",
+			setup:   func(q *Query[testDoc]) *Query[testDoc] { return q.Offset(20) },
+			wantSQL: "SELECT id, data, version FROM whisker_users OFFSET 20",
+		},
+		{
+			name:    "limit and offset",
+			setup:   func(q *Query[testDoc]) *Query[testDoc] { return q.Limit(10).Offset(20) },
+			wantSQL: "SELECT id, data, version FROM whisker_users LIMIT 10 OFFSET 20",
+		},
+		{
+			name:    "limit zero ignored",
+			setup:   func(q *Query[testDoc]) *Query[testDoc] { return q.Limit(0) },
+			wantSQL: "SELECT id, data, version FROM whisker_users",
+		},
+		{
+			name: "full chain",
+			setup: func(q *Query[testDoc]) *Query[testDoc] {
+				return q.Where("name", "=", "Alice").OrderBy("name", Asc).Limit(10).Offset(5)
+			},
+			wantSQL:  "SELECT id, data, version FROM whisker_users WHERE data->>'name' = $1 ORDER BY data->>'name' ASC LIMIT 10 OFFSET 5",
+			wantArgs: []any{"Alice"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &Query[testDoc]{table: "whisker_users"}
+			q = tt.setup(q)
+			gotSQL, gotArgs, err := q.toSQL()
+			if err != nil {
+				t.Fatalf("toSQL: %v", err)
+			}
+			if gotSQL != tt.wantSQL {
+				t.Errorf("sql:\n got: %s\nwant: %s", gotSQL, tt.wantSQL)
+			}
+			if len(tt.wantArgs) == 0 && len(gotArgs) == 0 {
+				return
+			}
+			if len(gotArgs) != len(tt.wantArgs) {
+				t.Fatalf("args: got %d, want %d", len(gotArgs), len(tt.wantArgs))
+			}
+			for i, a := range gotArgs {
+				if a != tt.wantArgs[i] {
+					t.Errorf("arg[%d]: got %v, want %v", i, a, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
 func TestQuery_InvalidOperator(t *testing.T) {
 	q := &Query[testDoc]{table: "whisker_users"}
 	q = q.Where("name", "DROP TABLE", "x")

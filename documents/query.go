@@ -122,6 +122,20 @@ func (q *Query[T]) OrderBy(field string, dir Direction) *Query[T] {
 	return c
 }
 
+func (q *Query[T]) Limit(n uint64) *Query[T] {
+	c := q.clone()
+	if n > 0 {
+		c.limit = &n
+	}
+	return c
+}
+
+func (q *Query[T]) Offset(n uint64) *Query[T] {
+	c := q.clone()
+	c.offset = &n
+	return c
+}
+
 func (q *Query[T]) toSQL() (string, []any, error) {
 	builder := psql.Select("id", "data", "version").From(q.table)
 
@@ -147,6 +161,13 @@ func (q *Query[T]) toSQL() (string, []any, error) {
 			clauses[i] = fmt.Sprintf("%s %s", field, ob.direction)
 		}
 		builder = builder.OrderBy(clauses...)
+	}
+
+	if q.limit != nil {
+		builder = builder.Limit(*q.limit)
+	}
+	if q.offset != nil {
+		builder = builder.Offset(*q.offset)
 	}
 
 	return builder.ToSql()
