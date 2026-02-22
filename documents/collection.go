@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
@@ -410,6 +411,137 @@ func (c *CollectionOf[T]) DeleteMany(ctx context.Context, ids []string) error {
 		return &BatchError{Op: "delete", Total: len(ids), Errors: errs}
 	}
 	return nil
+}
+
+type docInfo struct {
+	id         string
+	data       []byte
+	oldVersion int
+	newVersion int
+}
+
+// UpdateMany updates multiple documents in a single UPDATE...FROM VALUES statement.
+// Optimistic concurrency is enforced per document — if any document's version has
+// changed since it was loaded, the entire batch fails with a BatchError identifying
+// which documents had version conflicts vs which were missing.
+func (c *CollectionOf[T]) UpdateMany(ctx context.Context, docs []*T) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := c.checkBatchSize(len(docs)); err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	infos := make([]docInfo, len(docs))
+	for i, doc := range docs {
+		id, err := meta.ExtractID(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: %w", c.name, err)
+		}
+
+		currentVersion, _ := meta.ExtractVersion(doc)
+		data, err := c.codec.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("collection %s: update many %s: marshal: %w", c.name, id, err)
+		}
+
+		infos[i] = docInfo{
+			id:         id,
+			data:       data,
+			oldVersion: currentVersion,
+			newVersion: currentVersion + 1,
+		}
+	}
+
+	args := make([]any, 0, len(infos)*4)
+	valueClauses := make([]string, len(infos))
+	for i, info := range infos {
+		base := i * 4
+		valueClauses[i] = fmt.Sprintf("($%d::text, $%d::jsonb, $%d::int, $%d::int)",
+			base+1, base+2, base+3, base+4)
+		args = append(args, info.id, info.data, info.newVersion, info.oldVersion)
+	}
+
+	sql := fmt.Sprintf(
+		`UPDATE %s AS t SET data = v.data, version = v.new_version, updated_at = now() `+
+			`FROM (VALUES %s) AS v(id, data, new_version, old_version) `+
+			`WHERE t.id = v.id AND t.version = v.old_version `+
+			`RETURNING t.id`,
+		c.table, strings.Join(valueClauses, ", "))
+
+	rows, err := c.exec.Query(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: update many: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	updated := make(map[string]bool, len(docs))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("collection %s: update many: scan: %w", c.name, err)
+		}
+		updated[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("collection %s: update many: %w", c.name, err)
+	}
+
+	if len(updated) < len(docs) {
+		return c.identifyUpdateFailures(ctx, infos, updated)
+	}
+
+	for i, doc := range docs {
+		meta.SetVersion(doc, infos[i].newVersion)
+	}
+	return nil
+}
+
+func (c *CollectionOf[T]) identifyUpdateFailures(ctx context.Context, infos []docInfo, updated map[string]bool) error {
+	// collect IDs that failed
+	var failedIDs []string
+	for _, info := range infos {
+		if !updated[info.id] {
+			failedIDs = append(failedIDs, info.id)
+		}
+	}
+
+	// re-query to distinguish "not found" from "version conflict"
+	query, args, err := psql.Select("id").From(c.table).Where(sq.Eq{"id": failedIDs}).ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: update many: identify failures: %w", c.name, err)
+	}
+
+	rows, err := c.exec.Query(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: update many: identify failures: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("collection %s: update many: scan: %w", c.name, err)
+		}
+		existing[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("collection %s: update many: %w", c.name, err)
+	}
+
+	errs := map[string]error{}
+	for _, id := range failedIDs {
+		if existing[id] {
+			errs[id] = whisker.ErrVersionConflict
+		} else {
+			errs[id] = whisker.ErrNotFound
+		}
+	}
+	return &BatchError{Op: "update", Total: len(infos), Errors: errs}
 }
 
 func (c *CollectionOf[T]) checkBatchSize(n int) error {

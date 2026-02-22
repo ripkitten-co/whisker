@@ -264,6 +264,125 @@ func TestDeleteMany_EmptySlice(t *testing.T) {
 	}
 }
 
+func TestUpdateMany_HappyPath(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "update_many_users")
+
+	u1 := &User{ID: "u1", Name: "Alice", Email: "alice@test.com"}
+	u2 := &User{ID: "u2", Name: "Bob", Email: "bob@test.com"}
+	if err := users.InsertMany(ctx, []*User{u1, u2}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	loaded1, err := users.Load(ctx, "u1")
+	if err != nil {
+		t.Fatalf("load u1: %v", err)
+	}
+	loaded2, err := users.Load(ctx, "u2")
+	if err != nil {
+		t.Fatalf("load u2: %v", err)
+	}
+
+	loaded1.Name = "Alice Updated"
+	loaded2.Name = "Bob Updated"
+
+	if err := users.UpdateMany(ctx, []*User{loaded1, loaded2}); err != nil {
+		t.Fatalf("update many: %v", err)
+	}
+
+	if loaded1.Version != 2 {
+		t.Errorf("u1 version = %d, want 2", loaded1.Version)
+	}
+	if loaded2.Version != 2 {
+		t.Errorf("u2 version = %d, want 2", loaded2.Version)
+	}
+
+	reloaded1, err := users.Load(ctx, "u1")
+	if err != nil {
+		t.Fatalf("reload u1: %v", err)
+	}
+	if reloaded1.Name != "Alice Updated" {
+		t.Errorf("u1 name = %q, want %q", reloaded1.Name, "Alice Updated")
+	}
+
+	reloaded2, err := users.Load(ctx, "u2")
+	if err != nil {
+		t.Fatalf("reload u2: %v", err)
+	}
+	if reloaded2.Name != "Bob Updated" {
+		t.Errorf("u2 name = %q, want %q", reloaded2.Name, "Bob Updated")
+	}
+}
+
+func TestUpdateMany_VersionConflict(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "update_many_conflict_users")
+
+	if err := users.InsertMany(ctx, []*User{
+		{ID: "u1", Name: "Alice"},
+		{ID: "u2", Name: "Bob"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	u1a, err := users.Load(ctx, "u1")
+	if err != nil {
+		t.Fatalf("load u1a: %v", err)
+	}
+	u1b, err := users.Load(ctx, "u1")
+	if err != nil {
+		t.Fatalf("load u1b: %v", err)
+	}
+	u2, err := users.Load(ctx, "u2")
+	if err != nil {
+		t.Fatalf("load u2: %v", err)
+	}
+
+	// u1a wins the race
+	u1a.Name = "Alice v2"
+	if err := users.Update(ctx, u1a); err != nil {
+		t.Fatalf("update u1a: %v", err)
+	}
+
+	// u1b is now stale (version=1), u2 is fine (version=1)
+	u1b.Name = "Alice stale"
+	u2.Name = "Bob Updated"
+
+	err = users.UpdateMany(ctx, []*User{u1b, u2})
+	if err == nil {
+		t.Fatal("expected error for version conflict")
+	}
+
+	var batchErr *documents.BatchError
+	if !errors.As(err, &batchErr) {
+		t.Fatalf("expected BatchError, got %T: %v", err, err)
+	}
+	if batchErr.Op != "update" {
+		t.Errorf("op = %q, want %q", batchErr.Op, "update")
+	}
+	if len(batchErr.Errors) != 1 {
+		t.Fatalf("errors count = %d, want 1", len(batchErr.Errors))
+	}
+	if !errors.Is(batchErr.Errors["u1"], whisker.ErrVersionConflict) {
+		t.Errorf("u1 error = %v, want ErrVersionConflict", batchErr.Errors["u1"])
+	}
+}
+
+func TestUpdateMany_EmptySlice(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	users := documents.Collection[User](store, "update_many_empty_users")
+
+	if err := users.UpdateMany(ctx, nil); err != nil {
+		t.Errorf("nil slice: %v", err)
+	}
+	if err := users.UpdateMany(ctx, []*User{}); err != nil {
+		t.Errorf("empty slice: %v", err)
+	}
+}
+
 func TestInsertMany_BatchTooLarge(t *testing.T) {
 	connStr := setupConnStr(t)
 	store, err := whisker.New(context.Background(), connStr, whisker.WithMaxBatchSize(2))
