@@ -31,7 +31,7 @@ func OpenGORM(p *Pool) (*gorm.DB, error) {
 		SkipDefaultTransaction: true,
 	})
 	if err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("hooks: open gorm: %w", err)
 	}
 

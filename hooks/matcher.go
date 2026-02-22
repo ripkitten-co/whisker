@@ -78,7 +78,6 @@ func extractCreateTable(sql, upper string) string {
 	idx := strings.Index(rest, "CREATE TABLE ")
 	rest = rest[idx+13:]
 	if strings.HasPrefix(rest, "IF NOT EXISTS ") {
-		rest = rest[14:]
 		sql = sql[idx+13+14:]
 	} else {
 		sql = sql[idx+13:]
