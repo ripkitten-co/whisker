@@ -108,6 +108,44 @@ stream, _ = es.ReadStream(ctx, "order-123", 2)  // from version 2
 
 `expectedVersion: 0` means "new stream." Wrong version? `whisker.ErrConcurrencyConflict`.
 
+### Projections
+
+Async read-model projections and side-effect handlers. Each projection runs in its own goroutine with independent checkpoints and PostgreSQL advisory locks for single-writer coordination.
+
+```go
+// Read-model projection — transforms events into a queryable collection
+proj := projections.New[OrderSummary](store, "order_summaries").
+    On("OrderCreated", func(ctx context.Context, evt events.Event, state *OrderSummary) (*OrderSummary, error) {
+        var p OrderCreatedPayload
+        json.Unmarshal(evt.Data, &p)
+        return &OrderSummary{ID: evt.StreamID, Total: p.Total, Status: "pending"}, nil
+    }).
+    On("OrderPaid", func(ctx context.Context, evt events.Event, state *OrderSummary) (*OrderSummary, error) {
+        state.Status = "paid"
+        return state, nil
+    })
+
+// Side-effect handler — react to events without maintaining state
+notifier := projections.NewHandler("email_notifier").
+    On("OrderPaid", func(ctx context.Context, evt events.Event) error {
+        return sendReceipt(ctx, evt)
+    })
+
+// Daemon runs everything
+daemon := projections.NewDaemon(store,
+    projections.WithPollingInterval(5 * time.Second),
+    projections.WithBatchSize(100),
+)
+daemon.Add(proj)
+daemon.Add(notifier)
+daemon.Run(ctx) // blocks until ctx cancelled
+
+// Full rebuild from event history
+daemon.Rebuild(ctx, "order_summaries")
+```
+
+Returning `nil` from a projection handler deletes the read model for that stream. Dead-letter handling stops a projection after consecutive failures.
+
 ### Sessions (Transactions)
 
 Documents + events in one atomic Postgres transaction:
@@ -161,8 +199,8 @@ Whisker is in early development. Here's what's coming:
 - [x] `Count()`, `Exists()`, `OrderBy`, `Limit`/`Offset`, cursor pagination
 - [x] JSONB indexes (btree + GIN) via struct tags
 - [x] ORM hooks (GORM, Ent, Bun adapters)
-- [ ] Projections (rebuild read models from event streams)
-- [ ] Subscriptions (react to new events in real-time)
+- [x] Projections (rebuild read models from event streams)
+- [x] Subscriptions (react to new events in real-time)
 - [ ] Batch operations
 - [ ] Soft deletes
 

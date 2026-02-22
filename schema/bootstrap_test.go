@@ -25,7 +25,21 @@ func TestEventsDDL(t *testing.T) {
 	data JSONB NOT NULL,
 	metadata JSONB,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	global_position BIGINT GENERATED ALWAYS AS IDENTITY,
 	PRIMARY KEY (stream_id, version)
+)`
+	if ddl != want {
+		t.Errorf("got:\n%s\nwant:\n%s", ddl, want)
+	}
+}
+
+func TestProjectionCheckpointsDDL(t *testing.T) {
+	ddl := projectionCheckpointsDDL()
+	want := `CREATE TABLE IF NOT EXISTS whisker_projection_checkpoints (
+	projection_name TEXT PRIMARY KEY,
+	last_position BIGINT NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'running',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )`
 	if ddl != want {
 		t.Errorf("got:\n%s\nwant:\n%s", ddl, want)

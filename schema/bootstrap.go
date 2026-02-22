@@ -38,7 +38,17 @@ func eventsDDL() string {
 	data JSONB NOT NULL,
 	metadata JSONB,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	global_position BIGINT GENERATED ALWAYS AS IDENTITY,
 	PRIMARY KEY (stream_id, version)
+)`
+}
+
+func projectionCheckpointsDDL() string {
+	return `CREATE TABLE IF NOT EXISTS whisker_projection_checkpoints (
+	projection_name TEXT PRIMARY KEY,
+	last_position BIGINT NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'running',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )`
 }
 
@@ -69,6 +79,13 @@ func (b *Bootstrap) MarkCreated(table string) {
 func (b *Bootstrap) IsIndexCreated(name string) bool {
 	_, ok := b.indexes.Load(name)
 	return ok
+}
+
+// InvalidateTable removes a table from the creation cache so the next
+// EnsureCollection call will re-run the DDL. Used by Rebuild after dropping
+// a projection table.
+func (b *Bootstrap) InvalidateTable(table string) {
+	b.tables.Delete(table)
 }
 
 // MarkIndexCreated records that the named index has been created.
@@ -103,5 +120,38 @@ func (b *Bootstrap) EnsureEvents(ctx context.Context, exec pg.Executor) error {
 		return fmt.Errorf("schema: create events table: %w", err)
 	}
 	b.tables.Store("whisker_events", true)
+	return nil
+}
+
+// EnsureProjectionCheckpoints creates the whisker_projection_checkpoints table
+// if it doesn't exist.
+func (b *Bootstrap) EnsureProjectionCheckpoints(ctx context.Context, exec pg.Executor) error {
+	if _, ok := b.tables.Load("whisker_projection_checkpoints"); ok {
+		return nil
+	}
+	_, err := exec.Exec(ctx, projectionCheckpointsDDL())
+	if err != nil {
+		return fmt.Errorf("schema: create projection checkpoints table: %w", err)
+	}
+	b.tables.Store("whisker_projection_checkpoints", true)
+	return nil
+}
+
+// EnsureEventsGlobalPositionIndex creates an index on global_position for
+// ordered reads across all streams. Must be called with a pool-level executor,
+// not a session transaction — CREATE INDEX CONCURRENTLY cannot run inside a
+// transaction block.
+func (b *Bootstrap) EnsureEventsGlobalPositionIndex(ctx context.Context, exec pg.Executor) error {
+	const name = "idx_whisker_events_global_position"
+	if _, ok := b.indexes.Load(name); ok {
+		return nil
+	}
+	_, err := exec.Exec(ctx,
+		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_whisker_events_global_position ON whisker_events (global_position)`,
+	)
+	if err != nil {
+		return fmt.Errorf("schema: create events global_position index: %w", err)
+	}
+	b.indexes.Store(name, true)
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/events"
@@ -120,5 +121,91 @@ func TestEvents_ReadStreamEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d events, want 0", len(got))
+	}
+}
+
+func TestEvents_GlobalPosition(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	es := events.New(store)
+
+	err := es.Append(ctx, "stream-a", 0, []events.Event{
+		{Type: "A1", Data: []byte(`{"seq":1}`)},
+		{Type: "A2", Data: []byte(`{"seq":2}`)},
+	})
+	if err != nil {
+		t.Fatalf("append stream-a: %v", err)
+	}
+
+	err = es.Append(ctx, "stream-b", 0, []events.Event{
+		{Type: "B1", Data: []byte(`{"seq":3}`)},
+	})
+	if err != nil {
+		t.Fatalf("append stream-b: %v", err)
+	}
+
+	all, err := es.ReadAll(ctx, 0, 100)
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+
+	if len(all) != 3 {
+		t.Fatalf("got %d events, want 3", len(all))
+	}
+
+	for i, e := range all {
+		if e.GlobalPosition <= 0 {
+			t.Errorf("event[%d]: global_position %d should be > 0", i, e.GlobalPosition)
+		}
+		if i > 0 && e.GlobalPosition <= all[i-1].GlobalPosition {
+			t.Errorf("event[%d]: global_position %d not monotonically increasing (prev: %d)",
+				i, e.GlobalPosition, all[i-1].GlobalPosition)
+		}
+	}
+
+	// ReadStream should also populate GlobalPosition
+	streamA, err := es.ReadStream(ctx, "stream-a", 0)
+	if err != nil {
+		t.Fatalf("read stream-a: %v", err)
+	}
+	for i, e := range streamA {
+		if e.GlobalPosition <= 0 {
+			t.Errorf("stream-a event[%d]: global_position %d should be > 0", i, e.GlobalPosition)
+		}
+	}
+}
+
+func TestEvents_AppendSendsNotification(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	conn, err := store.PgxPool().Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, "LISTEN whisker_events")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	es := events.New(store)
+	err = es.Append(ctx, "notify-test", 0, []events.Event{
+		{Type: "SomethingHappened", Data: []byte(`{}`)},
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	notification, err := conn.Conn().WaitForNotification(waitCtx)
+	if err != nil {
+		t.Fatalf("wait for notification: %v", err)
+	}
+	if notification.Channel != "whisker_events" {
+		t.Errorf("channel: got %q, want %q", notification.Channel, "whisker_events")
 	}
 }
