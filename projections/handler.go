@@ -2,6 +2,7 @@ package projections
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ripkitten-co/whisker/events"
 )
@@ -35,4 +36,17 @@ func (h *Handler) EventTypes() []string {
 		types = append(types, t)
 	}
 	return types
+}
+
+func (h *Handler) Process(ctx context.Context, evts []events.Event, _ ProcessingStore) error {
+	for _, evt := range evts {
+		fn, ok := h.handlers[evt.Type]
+		if !ok {
+			continue
+		}
+		if err := fn(ctx, evt); err != nil {
+			return fmt.Errorf("handler %s: handle %s: %w", h.name, evt.Type, err)
+		}
+	}
+	return nil
 }

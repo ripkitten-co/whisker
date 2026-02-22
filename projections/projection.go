@@ -2,6 +2,7 @@ package projections
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ripkitten-co/whisker"
 	"github.com/ripkitten-co/whisker/events"
@@ -38,4 +39,44 @@ func (p *Projection[T]) EventTypes() []string {
 		types = append(types, t)
 	}
 	return types
+}
+
+func (p *Projection[T]) Process(ctx context.Context, evts []events.Event, ps ProcessingStore) error {
+	codec := p.store.JSONCodec()
+	for _, evt := range evts {
+		fn, ok := p.handlers[evt.Type]
+		if !ok {
+			continue
+		}
+
+		var state *T
+		data, version, err := ps.LoadState(ctx, p.name, evt.StreamID)
+		if err == nil && data != nil {
+			state = new(T)
+			if err := codec.Unmarshal(data, state); err != nil {
+				return fmt.Errorf("projection %s: unmarshal state for %s: %w", p.name, evt.StreamID, err)
+			}
+		}
+
+		result, err := fn(ctx, evt, state)
+		if err != nil {
+			return fmt.Errorf("projection %s: handle %s for %s: %w", p.name, evt.Type, evt.StreamID, err)
+		}
+
+		if result == nil {
+			if err := ps.DeleteState(ctx, p.name, evt.StreamID); err != nil {
+				return fmt.Errorf("projection %s: delete state for %s: %w", p.name, evt.StreamID, err)
+			}
+			continue
+		}
+
+		out, err := codec.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("projection %s: marshal state for %s: %w", p.name, evt.StreamID, err)
+		}
+		if err := ps.UpsertState(ctx, p.name, evt.StreamID, out, version); err != nil {
+			return fmt.Errorf("projection %s: upsert state for %s: %w", p.name, evt.StreamID, err)
+		}
+	}
+	return nil
 }
