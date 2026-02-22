@@ -359,6 +359,59 @@ func (c *CollectionOf[T]) LoadMany(ctx context.Context, ids []string) ([]*T, err
 	return docs, nil
 }
 
+// DeleteMany removes multiple documents by ID in a single DELETE with WHERE IN.
+// Uses RETURNING id to identify which requested IDs were actually deleted, then
+// reports missing IDs via a BatchError. Found documents are always deleted, even
+// when some IDs are missing.
+func (c *CollectionOf[T]) DeleteMany(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := c.checkBatchSize(len(ids)); err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+
+	query, args, err := psql.Delete(c.table).
+		Where(sq.Eq{"id": ids}).
+		Suffix("RETURNING id").
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("collection %s: delete many: build sql: %w", c.name, err)
+	}
+
+	rows, err := c.exec.Query(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("collection %s: delete many: %w", c.name, err)
+	}
+	defer rows.Close()
+
+	deleted := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("collection %s: delete many: scan: %w", c.name, err)
+		}
+		deleted[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("collection %s: delete many: %w", c.name, err)
+	}
+
+	if len(deleted) < len(ids) {
+		errs := map[string]error{}
+		for _, id := range ids {
+			if !deleted[id] {
+				errs[id] = whisker.ErrNotFound
+			}
+		}
+		return &BatchError{Op: "delete", Total: len(ids), Errors: errs}
+	}
+	return nil
+}
+
 func (c *CollectionOf[T]) checkBatchSize(n int) error {
 	if c.maxBatchSize > 0 && n > c.maxBatchSize {
 		return fmt.Errorf("collection %s: %w: %d exceeds max %d", c.name, whisker.ErrBatchTooLarge, n, c.maxBatchSize)
