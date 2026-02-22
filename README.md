@@ -121,6 +121,29 @@ events.New(sess).Append(ctx, "order-o1", 0, []events.Event{{Type: "OrderCreated"
 sess.Commit(ctx) // all or nothing
 ```
 
+### ORM Hooks (GORM, Ent, Bun)
+
+Already using an ORM? Whisker can sit underneath it. The hooks middleware intercepts SQL at the pgx driver level and rewrites it to target JSONB document storage. Your ORM thinks it's talking to normal tables.
+
+```go
+pool := hooks.NewPool(store)
+hooks.Register[User](pool, "users")
+
+// GORM
+db, _ := hooks.OpenGORM(pool)
+db.AutoMigrate(&User{})           // creates whisker_users table
+db.Create(&User{ID: "u1", Name: "Alice"})
+db.First(&user, "id = ?", "u1")   // reads from JSONB
+
+// Ent
+driver := hooks.EntDriver(pool)
+
+// Bun
+adapter := hooks.BunAdapter(pool)
+```
+
+INSERT, SELECT, UPDATE, DELETE, CREATE TABLE, and JOIN queries are all rewritten transparently. The ORM sees normal columns; Whisker stores JSONB.
+
 ### Swappable Codecs
 
 jsoniter ships as the default. Swap it:
@@ -137,6 +160,7 @@ Whisker is in early development. Here's what's coming:
 
 - [x] `Count()`, `Exists()`, `OrderBy`, `Limit`/`Offset`, cursor pagination
 - [x] JSONB indexes (btree + GIN) via struct tags
+- [x] ORM hooks (GORM, Ent, Bun adapters)
 - [ ] Projections (rebuild read models from event streams)
 - [ ] Subscriptions (react to new events in real-time)
 - [ ] Batch operations
