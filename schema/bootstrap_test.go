@@ -33,6 +33,19 @@ func TestEventsDDL(t *testing.T) {
 	}
 }
 
+func TestProjectionCheckpointsDDL(t *testing.T) {
+	ddl := projectionCheckpointsDDL()
+	want := `CREATE TABLE IF NOT EXISTS whisker_projection_checkpoints (
+	projection_name TEXT PRIMARY KEY,
+	last_position BIGINT NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'running',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)`
+	if ddl != want {
+		t.Errorf("got:\n%s\nwant:\n%s", ddl, want)
+	}
+}
+
 func TestValidateCollectionName(t *testing.T) {
 	tests := []struct {
 		name  string

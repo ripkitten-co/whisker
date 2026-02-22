@@ -43,6 +43,15 @@ func eventsDDL() string {
 )`
 }
 
+func projectionCheckpointsDDL() string {
+	return `CREATE TABLE IF NOT EXISTS whisker_projection_checkpoints (
+	projection_name TEXT PRIMARY KEY,
+	last_position BIGINT NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'running',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)`
+}
+
 // Bootstrap manages idempotent creation of Whisker tables and indexes.
 // It caches which tables and indexes have been created to avoid repeated DDL.
 type Bootstrap struct {
@@ -104,6 +113,20 @@ func (b *Bootstrap) EnsureEvents(ctx context.Context, exec pg.Executor) error {
 		return fmt.Errorf("schema: create events table: %w", err)
 	}
 	b.tables.Store("whisker_events", true)
+	return nil
+}
+
+// EnsureProjectionCheckpoints creates the whisker_projection_checkpoints table
+// if it doesn't exist.
+func (b *Bootstrap) EnsureProjectionCheckpoints(ctx context.Context, exec pg.Executor) error {
+	if _, ok := b.tables.Load("whisker_projection_checkpoints"); ok {
+		return nil
+	}
+	_, err := exec.Exec(ctx, projectionCheckpointsDDL())
+	if err != nil {
+		return fmt.Errorf("schema: create projection checkpoints table: %w", err)
+	}
+	b.tables.Store("whisker_projection_checkpoints", true)
 	return nil
 }
 
