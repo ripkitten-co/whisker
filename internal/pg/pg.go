@@ -55,3 +55,8 @@ func (p *Pool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 func (p *Pool) Begin(ctx context.Context) (pgx.Tx, error) {
 	return p.pool.Begin(ctx)
 }
+
+// PgxPool returns the underlying pgxpool.Pool for use with stdlib adapters.
+func (p *Pool) PgxPool() *pgxpool.Pool {
+	return p.pool
+}

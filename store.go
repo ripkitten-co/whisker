@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ripkitten-co/whisker/internal/codecs"
 	"github.com/ripkitten-co/whisker/internal/pg"
 	"github.com/ripkitten-co/whisker/schema"
@@ -52,3 +53,6 @@ func (s *Store) JSONCodec() codecs.Codec { return s.be.codec }
 
 // SchemaBootstrap returns the schema bootstrap manager.
 func (s *Store) SchemaBootstrap() *schema.Bootstrap { return s.be.schema }
+
+// PgxPool returns the underlying pgxpool.Pool for use with stdlib adapters.
+func (s *Store) PgxPool() *pgxpool.Pool { return s.pool.PgxPool() }
