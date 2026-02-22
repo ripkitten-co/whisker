@@ -49,6 +49,47 @@ func TestRewrite_Insert_PreservesID(t *testing.T) {
 	_ = rewritten
 }
 
+func TestRewrite_Select(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "SELECT id, name, email, version FROM users WHERE name = $1"
+	args := []any{"Alice"}
+
+	rewritten, newArgs, err := rewriteSelect(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !containsSubstring(rewritten, "whisker_users") {
+		t.Errorf("expected whisker_users in SQL: %s", rewritten)
+	}
+	if !containsSubstring(rewritten, "data->>'name'") {
+		t.Errorf("expected JSONB path in WHERE: %s", rewritten)
+	}
+	if len(newArgs) != 1 || newArgs[0] != "Alice" {
+		t.Errorf("args = %v, want [Alice]", newArgs)
+	}
+}
+
+func TestRewrite_Select_ByID(t *testing.T) {
+	r := newRegistry()
+	r.register("users", analyzeModel[testUser]("users"))
+	info, _ := r.lookup("users")
+
+	sql := "SELECT id, name, email, version FROM users WHERE id = $1"
+	args := []any{"u1"}
+
+	rewritten, _, err := rewriteSelect(info, sql, args)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	// id is a real column, not a JSONB path
+	if containsSubstring(rewritten, "data->>'id'") {
+		t.Errorf("id should not be JSONB path: %s", rewritten)
+	}
+}
+
 func containsSubstring(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && stringContains(s, sub))
 }

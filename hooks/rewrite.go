@@ -55,6 +55,74 @@ func rewriteInsert(info *modelInfo, sql string, args []any) (string, []any, erro
 	return rewritten, newArgs, nil
 }
 
+// rewriteSelect transforms an ORM SELECT into a Whisker JSONB query.
+// Column references in WHERE are translated to JSONB paths.
+// The result includes (id, data, version) — caller unpacks via rows wrapper.
+func rewriteSelect(info *modelInfo, sql string, args []any) (string, []any, error) {
+	upper := strings.ToUpper(sql)
+
+	rewritten := replaceTableName(sql, info.name, info.table)
+
+	whereIdx := strings.Index(upper, " WHERE ")
+	if whereIdx >= 0 {
+		before := rewritten[:whereIdx+7]
+		after := rewritten[whereIdx+7:]
+		after = rewriteColumnRefs(after, info)
+		rewritten = before + after
+	}
+
+	rewritten = rewriteSelectColumns(rewritten, info)
+
+	return rewritten, args, nil
+}
+
+func replaceTableName(sql, oldTable, newTable string) string {
+	result := strings.ReplaceAll(sql, "\""+oldTable+"\"", newTable)
+	result = replaceWord(result, oldTable, newTable)
+	return result
+}
+
+func replaceWord(s, old, replacement string) string {
+	idx := 0
+	for {
+		pos := strings.Index(strings.ToLower(s[idx:]), strings.ToLower(old))
+		if pos == -1 {
+			break
+		}
+		absPos := idx + pos
+		before := absPos == 0 || !isIdentChar(s[absPos-1])
+		after := absPos+len(old) >= len(s) || !isIdentChar(s[absPos+len(old)])
+		if before && after {
+			s = s[:absPos] + replacement + s[absPos+len(old):]
+			idx = absPos + len(replacement)
+		} else {
+			idx = absPos + len(old)
+		}
+	}
+	return s
+}
+
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+func rewriteColumnRefs(whereClause string, info *modelInfo) string {
+	for _, dc := range info.dataCols {
+		whereClause = replaceWord(whereClause, dc.name, fmt.Sprintf("data->>'%s'", dc.jsonKey))
+	}
+	return whereClause
+}
+
+func rewriteSelectColumns(sql string, info *modelInfo) string {
+	upper := strings.ToUpper(sql)
+	selectIdx := strings.Index(upper, "SELECT ")
+	fromIdx := strings.Index(upper, " FROM ")
+	if selectIdx == -1 || fromIdx == -1 {
+		return sql
+	}
+	return sql[:selectIdx+7] + "id, data, version" + sql[fromIdx:]
+}
+
 func extractInsertColumns(sql string) []string {
 	upper := strings.ToUpper(sql)
 	start := strings.IndexByte(upper, '(')
